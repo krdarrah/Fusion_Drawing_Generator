@@ -1,0 +1,8 @@
+.DS_Store
+Screenshot*.png
+*.pdf
+*_drawing_settings.json
+*.ulp
+*.zip
+drawingMaker_Test.html
+node_modules/
