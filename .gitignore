@@ -6,3 +6,5 @@ Screenshot*.png
 *.zip
 drawingMaker_Test.html
 node_modules/
+*.fab
+*.fatf
