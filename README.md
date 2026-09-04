@@ -38,6 +38,10 @@ Settings, hand-placed labels and notes are remembered per board name in the brow
 
 Everything lives in one HTML file with no build step. The version and changelog are at the top of the file. One module is inlined between the `MODULES` markers: the label placement engine.
 
+## Feedback
+
+Suggestions, bugs or feature ideas: [contact KD Circuits](https://www.kdcircuits.com/#contact) or open an issue on [GitHub](https://github.com/krdarrah/Fusion_Drawing_Generator/issues).
+
 ## License
 
 MIT – see `LICENSE`. © 2026 KD Circuits LLC.
