@@ -18,7 +18,7 @@ A single-file, offline web tool that turns an EAGLE / Fusion 360 Electronics boa
 2. Open `PCB_Drawing_Generator.html` in a modern browser (Chrome, Edge, Firefox or Safari) and drop the `.brd` onto it.
 3. Fill in the title block once (company, logo, name, SKU). The fab drawing uses `SKU-PCB` automatically.
 4. Set the PCB specification. The panel mirrors the PCBWay order form (material, TG, thickness, finish, via process, special processes, etc.); the fab notes and the information table are generated from those choices. Standard PCBWay stack-ups are built in; the board's own design-rule stack-up or a custom one can be used instead.
-5. Pick a drawing style (Classic, Blueprint, Colorful, Tactile, Dark) from the dropdown above the sheet, and tick **Realistic board colors** in the Sheet panel to render the board with the ordered mask, surface finish and silkscreen colors.
+5. Pick a drawing style (Classic, Blueprint, Colorful, Tactical, Dark) from the dropdown above the sheet, and tick **Realistic board colors** in the Sheet panel to render the board with the ordered mask, surface finish and silkscreen colors.
 6. Review the sheets. Drag any designator, callout or note to tidy the drawing (double-click to snap back). Use **+ Add note** to pin text to a spot on a view; drag the ring to move the spot.
 7. **Download PDF** to get both drawings in one file.
 

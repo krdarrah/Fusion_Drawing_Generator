@@ -1,10 +1,12 @@
 <!doctype html>
 <!--
   PCB Drawing Generator — single-file fab / assembly drawing generator for EAGLE / Fusion 360 .brd files
-  Version 1.3.0 (2026-09-03)
+  Version 1.3.1 (2026-09-03)
   Built by KD Circuits LLC — https://www.kdcircuits.com
 
   Changelog
+  1.3.1  "Tactical" style replaces Tactile: khaki paper, olive-drab ink and pads, rust milling, stencil-style
+         uppercase monospace captions (Courier in the PDF).
   1.3.0  Drawing styles (Classic, Blueprint, Colorful, Tactile, Dark) and realistic board colors driven by the
          ordered mask, surface finish, silkscreen and via process.
   1.2.1  Links to the GitHub source and to KD Circuits contact (header and footer).
@@ -444,7 +446,7 @@ button.link:hover{color:var(--accent)}
       <span class="sheetname" id="sheetname"></span>
       <div class="spacer"></div>
       <label class="field" style="flex-direction:row;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace">Style
-        <select id="s-style" class="txt" style="width:auto;padding:4px 8px"><option value="classic">Classic</option><option value="blueprint">Blueprint</option><option value="colorful">Colorful</option><option value="tactile">Tactile</option><option value="dark">Dark</option></select>
+        <select id="s-style" class="txt" style="width:auto;padding:4px 8px"><option value="classic">Classic</option><option value="blueprint">Blueprint</option><option value="colorful">Colorful</option><option value="tactical">Tactical</option><option value="dark">Dark</option></select>
       </label>
       <button class="btn" id="btn-note" title="Click a spot on a view and type a note; it gets a leader to that spot">+ Add note</button>
       <span class="help" id="notehint"></span>
@@ -1081,7 +1083,7 @@ window.DEMO_BRD_GZ = "H4sIAHfhmWoC/+y93XYcOZbvd19PkZaXZ/Wc0xHCZ3x0d/UxRX20ukRJh2
 "use strict";
 
 /* ================================================================== constants */
-const TOOL_VERSION = "1.3.0";
+const TOOL_VERSION = "1.3.1";
 const DEG = Math.PI/180;
 const MIRROR = {1:16,16:1,21:22,22:21,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31,
                 33:34,34:33,35:36,36:35,37:38,38:37,39:40,40:39,41:42,42:41,51:52,52:51};
@@ -1607,15 +1609,16 @@ const THEMES = {
              boardFill:"#1b47a0", pad:"#cfe0ff", padLine:"#ffffff", padSilk:"#9fbaf0", padAsm:"#7fa1e6", body:"#bcd0ff", place:"#e6ecff", silkRef:"#a9c1f5", via:"#dbe6ff", trace:"#8fb0f0", mill:"#dbe6ff", dnp:"#5f7fc4", hardware:"#bcd0ff", backing:"#173e8c", dim:"#ffffff"},
   colorful: {label:"Colorful",  paper:"#ffffff", ink:"#1a1a1a", inkSoft:"#333333", muted:"#666666", tableTitle:"#e8f1ff", tableLabel:"#fff3cd", core:"#8a6d3b", prepreg:"#e0c98f",
              boardFill:"#eaf4ea", pad:"#c98f3d", padLine:"#8a5a1a", padSilk:"#e2b878", padAsm:"#e7c9a0", body:"#3a7bd5", place:"#1f5fb0", silkRef:"#5c8fd6", via:"#b35c1e", trace:"#d8a35c", mill:"#c0392b", dnp:"#bbbbbb", hardware:"#7a7a7a", backing:"#ffffff", dim:"#c0392b"},
-  tactile:  {label:"Tactile",   paper:"#f6f1e7", ink:"#2b2622", inkSoft:"#4a423b", muted:"#8a7f73", tableTitle:"#ebe3d4", tableLabel:"#efe7d8", core:"#8b7b68", prepreg:"#d9cdb8",
-             boardFill:"#e9e2d3", pad:"#5b6b7a", padLine:"#2f3a44", padSilk:"#9fa9b3", padAsm:"#b7c0c8", body:"#7d8790", place:"#4f5860", silkRef:"#8d9aa5", via:"#6b7580", trace:"#98a2ab", mill:"#7a5c3a", dnp:"#c9c1b5", hardware:"#7d7368", backing:"#f6f1e7", dim:"#2b2622"},
+  tactical: {label:"Tactical",  paper:"#d6cfae", ink:"#1e2414", inkSoft:"#2f3a1f", muted:"#5b6340", tableTitle:"#c3bc98", tableLabel:"#cbc49f", core:"#4b5320", prepreg:"#8a8f5f",
+             boardFill:"#b9b58e", pad:"#3b4422", padLine:"#1e2414", padSilk:"#6c7448", padAsm:"#8b9160", body:"#4f5733", place:"#2f3a1f", silkRef:"#5b6340", via:"#3b4422", trace:"#6c7448", mill:"#7a2e1f", dnp:"#a8a37e", hardware:"#5b6340", backing:"#d6cfae", dim:"#1e2414",
+             captionFont:"IBM Plex Mono, Courier New, Courier, monospace", captionItalic:false, captionUpper:true, captionSpacing:0.08},
   dark:     {label:"Dark",      paper:"#14171a", ink:"#e8ecef", inkSoft:"#c8ced3", muted:"#8d979e", tableTitle:"#1f2529", tableLabel:"#22303a", core:"#3a4147", prepreg:"#5a646b",
              boardFill:"#1c2126", pad:"#9aa4ad", padLine:"#d0d7dd", padSilk:"#6e7a84", padAsm:"#4f5a63", body:"#7b868f", place:"#b3bcc3", silkRef:"#8d979e", via:"#a9b3bb", trace:"#6f7a83", mill:"#c9a24a", dnp:"#4a545c", hardware:"#8d979e", backing:"#14171a", dim:"#e8ecef"}
 };
 let TH = THEMES.classic, REAL = null;
 let INK, PADFILL, PADLINE, BODY, LIGHTPAD, VIA;
 function applyTheme(style, realistic, spec){
-  TH = THEMES[style] || THEMES.classic;
+  TH = THEMES[style==="tactile" ? "tactical" : style] || THEMES.classic;
   REAL = realistic ? realisticPalette(spec) : null;
   INK = TH.ink; PADFILL = TH.pad; PADLINE = TH.padLine; BODY = TH.body; LIGHTPAD = TH.padAsm; VIA = TH.via;
 }
@@ -1953,10 +1956,10 @@ function renderBoardView(model, o){
 /* ================================================================== sheet composer (paper mm, y down) */
 const FONT = "Arial, Helvetica, sans-serif";
 const N4 = v => (+v).toFixed(3);
-const twidth = (str, fs) => String(str).length * fs * 0.52;
+const twidth = (str, fs, mono) => String(str).length * fs * (mono ? 0.6 : 0.52);
 const fitText = (str, maxW, fs) => (maxW>0 && twidth(str,fs) > maxW) ? ` textLength="${N4(maxW)}" lengthAdjust="spacingAndGlyphs"` : "";
 function T(x,y,str,fs,o){ o=o||{};
-  return `<text x="${N4(x)}" y="${N4(y)}" font-family="${FONT}" font-size="${N4(fs)}"${o.anchor?` text-anchor="${o.anchor}"`:""}`+
+  return `<text x="${N4(x)}" y="${N4(y)}" font-family="${o.family||FONT}" font-size="${N4(fs)}"${o.anchor?` text-anchor="${o.anchor}"`:""}${o.spacing?` letter-spacing="${N4(fs*o.spacing)}"`:""}`+
          `${o.bold?' font-weight="bold"':""}${o.italic?' font-style="italic"':""} fill="${o.fill||TH.ink}"`+
          `${o.rot?` transform="rotate(${N4(o.rot)} ${N4(x)} ${N4(y)})"`:""}${o.maxW?fitText(str,o.maxW,fs):""}${o.extra||""}>${esc(str)}</text>`; }
 function R(x,y,w,h,o){ o=o||{};
@@ -1970,6 +1973,11 @@ function haloText(x,y,str,fs,o){ o=o||{};
   const by = y-fs*0.9;
   const rect = `<rect x="${N4(bx)}" y="${N4(by)}" width="${N4(tw)}" height="${N4(th)}" rx="${N4(fs*0.15)}" fill="${TH.backing}" fill-opacity="0.88"${o.rot?` transform="rotate(${N4(o.rot)} ${N4(x)} ${N4(y)})"`:""}/>`;
   return rect + T(x,y,str,fs,o);
+}
+/* view captions ("Board Top", "Drill Map", ...) follow the theme's caption style */
+function captionT(x,y,str,fs,o){ o=o||{};
+  const txt = TH.captionUpper ? String(str).toUpperCase() : str;
+  return T(x,y,txt,fs,Object.assign({bold:true, italic:TH.captionItalic!==false, family:TH.captionFont, spacing:TH.captionSpacing}, o));
 }
 function wrapText(str, maxW, fs){
   const out=[];
@@ -2272,7 +2280,7 @@ function placeView(model, cell, v){
     }
   }
   if(v.caption){
-    g += T(cell.x+cell.w/2, by2+mB+2*k, v.caption + (r.padsOnly ? " — no components, pads only" : ""), 6.2*k, {anchor:"middle", bold:true, italic:true});
+    g += captionT(cell.x+cell.w/2, by2+mB+2*k, v.caption + (r.padsOnly ? " — no components, pads only" : ""), 6.2*k, {anchor:"middle"});
     g += T(cell.x+cell.w/2, by2+mB+7*k, "SCALE "+scaleLabel(s) + (flip==="x" ? "  ·  VIEWED FROM BOTTOM, BOARD FLIPPED LEFT OVER RIGHT" : flip==="y" ? "  ·  VIEWED FROM BOTTOM, BOARD FLIPPED TOP OVER BOTTOM" : ""), 3*k, {anchor:"middle"});
   }
   return {svg:g, scale:s, bbox:{x1:bx1,y1:by1,x2:bx2,y2:by2}};
@@ -2375,14 +2383,14 @@ function buildFabSingle(model, D){
     if(D.fab.stackDiagram){
       const dw = 46*k, dh = Math.min(100*k, availH);
       g += stackDiagramSvg(rcx, ry, dw, dh, D.stack.map((l,i)=>({...l, letter:letters[i]})), k);
-      g += T(rcx+dw/2+3*k, ry+dh+9*k, "Board Stack-Up", 5.2*k, {anchor:"middle", bold:true, italic:true});
+      g += captionT(rcx+dw/2+3*k, ry+dh+9*k, "Board Stack-Up", 5.2*k, {anchor:"middle"});
       dx = rcx+dw+gap*1.5;
     }
     if(D.fab.vendorImg){
       const vi = D.fab.vendorImg, bw = rcx+rcw-dx, bh = Math.min(availH, 110*k);
       const sc = Math.min(bw/vi.w, bh/vi.h), iw=vi.w*sc, ih=vi.h*sc;
       g += `<image href="${vi.src}" xlink:href="${vi.src}" x="${N4(dx+(bw-iw)/2)}" y="${N4(ry)}" width="${N4(iw)}" height="${N4(ih)}"/>`;
-      g += T(dx+bw/2, ry+ih+9*k, "Vendor Stack-Up", 5.2*k, {anchor:"middle", bold:true, italic:true});
+      g += captionT(dx+bw/2, ry+ih+9*k, "Vendor Stack-Up", 5.2*k, {anchor:"middle"});
     }
   }
   /* bottom-left content is measured first; the board views take whatever height is left */
@@ -2458,7 +2466,7 @@ function buildFabCompact(model, D){
     if(D.fab.stackDiagram){
       const dw = 40*k;
       g += stackDiagramSvg(dx, y, dw, diagH, D.stack.map((l,i)=>({...l, letter:letters[i]})), k);
-      g += T(dx+dw/2+3*k, y+diagH+8*k, "Board Stack-Up", 4.6*k, {anchor:"middle", bold:true, italic:true});
+      g += captionT(dx+dw/2+3*k, y+diagH+8*k, "Board Stack-Up", 4.6*k, {anchor:"middle"});
       dx += dw + gap*1.5;
     }
     let mapDone = false;
@@ -2624,7 +2632,8 @@ function pdfColor(c){
   return named[c.toLowerCase()] || [0,0,0];
 }
 const measureCtx = document.createElement("canvas").getContext("2d");
-function pdfTextWidth(str, fs, bold, italic){
+function pdfTextWidth(str, fs, bold, italic, mono){
+  if(mono) return String(str).length*fs*0.6;                     /* Courier: fixed 600/1000 em advance */
   measureCtx.font = `${italic?"italic ":""}${bold?"bold ":""}100px Arial, Helvetica, sans-serif`;
   return measureCtx.measureText(str).width/100*fs;
 }
@@ -2719,7 +2728,9 @@ async function svgSheetToPdfPage(svgText){
   function drawText(el, opacity, color){
     const fs = parseFloat(attr(el,"font-size","10")); if(!(fs>0)) return;
     const bold = /bold|[6-9]00/.test(attr(el,"font-weight","")), italic = /italic|oblique/.test(attr(el,"font-style",""));
-    const font = bold&&italic ? "F4" : bold ? "F2" : italic ? "F3" : "F1";
+    const mono = /mono|courier/i.test(attr(el,"font-family",""));
+    const font = (mono ? "F5" : "F1").replace(/\d/, m => String(+m + (bold&&italic ? 3 : bold ? 1 : italic ? 2 : 0)));
+    const lsp = parseFloat(attr(el,"letter-spacing","0"))||0;
     const anchor = attr(el,"text-anchor","start"), af = anchor==="middle" ? 0.5 : anchor==="end" ? 1 : 0;
     let fill = attr(el,"fill","#000"); if(fill==="currentColor") fill=color; const fc = pdfColor(fill);
     let stroke = attr(el,"stroke","none"); if(stroke==="currentColor") stroke=color; const sc = pdfColor(stroke), sw = parseFloat(attr(el,"stroke-width","0"));
@@ -2734,11 +2745,11 @@ async function svgSheetToPdfPage(svgText){
     gstate(opacity, opacity);
     lines.forEach(ln=>{
       const str = String(ln.str||"").replace(/\s+/g," "); if(!str.trim()) return;
-      const w = pdfTextWidth(str, fs, bold, italic); let sx=1;
+      const w = pdfTextWidth(str, fs, bold, italic, mono) + lsp*Math.max(0, str.length-1); let sx=1;
       if(isFinite(tl) && tl>0 && w>tl) sx = tl/w;
-      const tx = ln.x - af*w*sx, s = pdfStr(str), tm = [sx,0,0,-1,tx,ln.y].map(pn).join(" ");
-      if(sc && sw>0) P(`BT /${font} ${pn(fs)} Tf 1 Tr ${sc.map(pn).join(" ")} RG ${pn(sw)} w 1 j ${tm} Tm (${s}) Tj ET`);
-      if(fc) P(`BT /${font} ${pn(fs)} Tf 0 Tr ${fc.map(pn).join(" ")} rg ${tm} Tm (${s}) Tj ET`);
+      const tx = ln.x - af*w*sx, s = pdfStr(str), tm = [sx,0,0,-1,tx,ln.y].map(pn).join(" "), tc = lsp ? ` ${pn(lsp)} Tc` : "";
+      if(sc && sw>0) P(`BT /${font} ${pn(fs)} Tf${tc} 1 Tr ${sc.map(pn).join(" ")} RG ${pn(sw)} w 1 j ${tm} Tm (${s}) Tj ET`);
+      if(fc) P(`BT /${font} ${pn(fs)} Tf${tc} 0 Tr ${fc.map(pn).join(" ")} rg ${tm} Tm (${s}) Tj ET`);
     });
     P("Q");
   }
@@ -2798,7 +2809,7 @@ async function buildPdf(sheets){
   for(const s of sheets) pages.push(await svgSheetToPdfPage(s.svg));
   const objs = [];                       /* each: Uint8Array body (without "n 0 obj"/"endobj") */
   const add = body => { objs.push(body); return objs.length; };
-  const FONTS = ["Helvetica","Helvetica-Bold","Helvetica-Oblique","Helvetica-BoldOblique"];
+  const FONTS = ["Helvetica","Helvetica-Bold","Helvetica-Oblique","Helvetica-BoldOblique","Courier","Courier-Bold","Courier-Oblique","Courier-BoldOblique"];
   const fontRefs = FONTS.map(f=> add(latin1(`<< /Type /Font /Subtype /Type1 /BaseFont /${f} /Encoding /WinAnsiEncoding >>`)));
   const pagesRef = add(null);            /* filled later */
   const kids = [];
