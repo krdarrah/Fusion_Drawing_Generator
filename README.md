@@ -10,7 +10,7 @@ A single-file, offline web tool that turns an EAGLE / Fusion 360 Electronics boa
 
 - **Fab drawing** – board top/bottom views with overall dimensions and hole callouts, a Milling & Cutouts view when the board has internal cutouts or slots, General PCB Information table, lettered stack-up table with cross-section, drill table (Sym / N° / Mils / MM / Qty / Plated) with a drill map, auto-generated fab notes, part-number box and title block.
 - **Assembly drawing** – silkscreen views, assembly views with collision-free reference designators, pin-1 dots, cathode (K) and polarity (+) marks read from the footprints, optional parts-list sheets, assembly notes.
-- **Exports** – vector PDF at the exact sheet size (Letter by default, also Tabloid, A1–A4, ANSI B–D), SVG, PNG, BOM CSV, centroid (pick-and-place) CSV, drill-table CSV, and a Fabmaster `.fab` (FATF) file equivalent to CadSoft's `fabmasterF360.ulp`.
+- **Export** – one vector PDF containing both drawings (parts list included) at the exact sheet size: Letter by default, also Tabloid, A1–A4, ANSI B–D. Settings can be saved to and loaded from a `.json`.
 
 ## How to use it
 
@@ -19,7 +19,7 @@ A single-file, offline web tool that turns an EAGLE / Fusion 360 Electronics boa
 3. Fill in the title block once (company, logo, name, SKU). The fab drawing uses `SKU-PCB` automatically.
 4. Set the PCB specification. The panel mirrors the PCBWay order form (material, TG, thickness, finish, via process, special processes, etc.); the fab notes and the information table are generated from those choices. Standard PCBWay stack-ups are built in; the board's own design-rule stack-up or a custom one can be used instead.
 5. Review the sheets. Drag any designator, callout or note to tidy the drawing (double-click to snap back). Use **+ Add note** to pin text to a spot on a view; drag the ring to move the spot.
-6. **Download PDF** for each document, or both in one file.
+6. **Download PDF** to get both drawings in one file.
 
 Settings, hand-placed labels and notes are remembered per board name in the browser and can be saved to a `.json` with **Save settings**. When you rev a board, load the new `.brd` and the old `.json`; the notes and labels come along.
 
@@ -36,7 +36,7 @@ Settings, hand-placed labels and notes are remembered per board name in the brow
 
 ## Development
 
-Everything lives in one HTML file with no build step. The version and changelog are at the top of the file. Three modules are inlined between the `MODULES` markers: a small XML parser, the label placement engine, and the Fabmaster FATF port.
+Everything lives in one HTML file with no build step. The version and changelog are at the top of the file. One module is inlined between the `MODULES` markers: the label placement engine.
 
 ## License
 

@@ -1,10 +1,12 @@
 <!doctype html>
 <!--
   PCB Drawing Generator — single-file fab / assembly drawing generator for EAGLE / Fusion 360 .brd files
-  Version 1.1.1 (2026-09-03)
+  Version 1.2.0 (2026-09-03)
   Built by KD Circuits LLC — https://www.kdcircuits.com
 
   Changelog
+  1.2.0  Simplified exports: one PDF (fab + assembly, parts list included) and settings save/load. SVG, PNG, CSV,
+         Fabmaster and browser-print exports removed along with their modules.
   1.1.1  KD Circuits branding: site theme (dark, mint accent, Archivo + IBM Plex Mono), logo linking to kdcircuits.com,
          footer credit.
   1.1.0  First public release. Built-in demo board on first open; Fusion 360 export instructions; deep links
@@ -155,16 +157,6 @@ button.link:hover{color:var(--accent)}
 .empty h3{font-size:16px;color:var(--ink)}
 .empty p{max-width:46ch;font-size:12.5px;margin:0}
 .tip{position:absolute;left:12px;bottom:10px;font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--muted);letter-spacing:.03em;z-index:3}
-#printroot{display:none}
-
-@media print{
-  body{background:#fff}
-  .app{display:none!important}
-  #printroot{display:block}
-  #printroot .page{page-break-after:always;break-after:page;page-break-inside:avoid;overflow:hidden;box-sizing:border-box}
-  #printroot .page:last-child{page-break-after:auto;break-after:auto}
-  #printroot svg{display:block}
-}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -408,29 +400,15 @@ button.link:hover{color:var(--accent)}
       <summary>Export</summary>
       <div class="inner">
         <div class="btnrow">
-          <button class="btn primary" id="btn-pdf">Download PDF (this document)</button>
-          <button class="btn" id="btn-pdfall">PDF (both documents)</button>
+          <button class="btn primary" id="btn-pdf">Download PDF</button>
         </div>
-        <div class="help">PDFs are written directly by this page as vector pages at the exact sheet size (Letter = 11 × 8.5 in), so no print dialog, margins or scaling are involved.</div>
-        <div class="btnrow"><button class="btn" id="btn-print">Print… (browser dialog)</button></div>
-        <div class="btnrow">
-          <button class="btn" id="btn-svg">SVG (sheet)</button>
-          <button class="btn" id="btn-png">PNG (sheet)</button>
-          <select id="s-dpi" class="txt" style="width:auto"><option value="150">150 dpi</option><option value="300" selected>300 dpi</option><option value="600">600 dpi</option></select>
-        </div>
+        <div class="help">One PDF with the fab drawing followed by the assembly drawing, written by this page as vector pages at the exact sheet size (Letter = 11 × 8.5 in). No print dialog, margins or scaling involved.</div>
         <div class="btnrow">
           <button class="btn" id="btn-saveSettings">Save settings .json</button>
           <button class="btn" id="btn-loadSettings">Load settings</button>
           <input type="file" id="settingsinput" accept=".json,application/json" hidden>
         </div>
         <div class="help" id="settingsnote">Everything (title block, spec, notes, logo, vendor image, hand-placed labels and added notes) is remembered per board name in this browser and can be saved to a .json. To rev a board: load the new .brd, then load the old .json (or the other way round); the notes come along.</div>
-        <div class="btnrow">
-          <button class="btn" id="btn-bom">BOM .csv</button>
-          <button class="btn" id="btn-xy">Centroid .csv</button>
-          <button class="btn" id="btn-drillcsv">Drill table .csv</button>
-          <button class="btn" id="btn-fatf" title="Same output as the fabmasterF360.ulp Fabmaster FATF export">Fabmaster .fab</button>
-        </div>
-        <div class="help">If you print instead: paper size <b id="printsize">Letter</b>, landscape, margins none, scale 100%, headers and footers off.</div>
         <div class="help" id="exportnote"></div>
       </div>
     </details>
@@ -456,7 +434,7 @@ button.link:hover{color:var(--accent)}
       <div class="spacer"></div>
       <button class="btn" id="btn-note" title="Click a spot on a view and type a note; it gets a leader to that spot">+ Add note</button>
       <span class="help" id="notehint"></span>
-      <button class="btn" id="btn-printall">Download PDF (both documents)</button>
+      <button class="btn primary" id="btn-printall">Download PDF</button>
     </div>
     <div class="canvaswrap" id="canvaswrap">
       <div class="credit">&copy; 2026 <a href="https://www.kdcircuits.com" target="_blank" rel="noopener">KD Circuits LLC</a> &middot; open source, MIT</div>
@@ -467,72 +445,7 @@ button.link:hover{color:var(--accent)}
     </div>
   </main>
 </div>
-<div id="printroot"></div>
-<div id="printstyle"></div>
-
 <!-- MODULES:BEGIN -->
-<script>/* ===== inlined module: xmltree.js ===== */
-/* Tiny dependency-free XML -> tree parser, good enough for EAGLE / Fusion .brd files.
-   Works in Node (module.exports) and the browser (window.parseXmlTree).
-   Node shape: { tag, attrs:{...}, children:[node...], text:"" }
-   Helpers: q(node, path) -> first descendant by "a > b > c" path (direct children only), qa(node, path) -> all */
-(function(root){
-  "use strict";
-  const ENT = {amp:"&", lt:"<", gt:">", quot:'"', apos:"'"};
-  function decode(s){
-    return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (m,e)=>{
-      if(e[0]==="#") return String.fromCodePoint(e[1]==="x"||e[1]==="X" ? parseInt(e.slice(2),16) : parseInt(e.slice(1),10));
-      return e in ENT ? ENT[e] : m;
-    });
-  }
-  function parseXmlTree(text){
-    const rootNode = {tag:"#document", attrs:{}, children:[], text:""};
-    const stack = [rootNode];
-    let i = 0, n = text.length;
-    while(i < n){
-      const lt = text.indexOf("<", i);
-      if(lt < 0){ break; }
-      if(lt > i){ const t = text.slice(i, lt); if(t.trim()) stack[stack.length-1].text += decode(t); }
-      if(text.startsWith("<!--", lt)){ const e = text.indexOf("-->", lt+4); i = e<0 ? n : e+3; continue; }
-      if(text.startsWith("<![CDATA[", lt)){ const e = text.indexOf("]]>", lt+9); stack[stack.length-1].text += text.slice(lt+9, e<0?n:e); i = e<0 ? n : e+3; continue; }
-      if(text.startsWith("<?", lt)){ const e = text.indexOf("?>", lt+2); i = e<0 ? n : e+2; continue; }
-      if(text.startsWith("<!", lt)){ const e = text.indexOf(">", lt+2); i = e<0 ? n : e+1; continue; }
-      const gt = text.indexOf(">", lt);
-      if(gt < 0) break;
-      const raw = text.slice(lt+1, gt);
-      i = gt+1;
-      if(raw[0] === "/"){ stack.pop(); if(!stack.length) stack.push(rootNode); continue; }
-      const selfClose = raw.endsWith("/");
-      const body = selfClose ? raw.slice(0,-1) : raw;
-      const m = body.match(/^\s*([^\s\/>]+)\s*([\s\S]*)$/);
-      if(!m) continue;
-      const node = {tag:m[1], attrs:{}, children:[], text:""};
-      const attrRe = /([^\s=]+)\s*=\s*("([^"]*)"|'([^']*)')/g; let am;
-      while((am = attrRe.exec(m[2]))){ node.attrs[am[1]] = decode(am[3]!==undefined ? am[3] : am[4]); }
-      stack[stack.length-1].children.push(node);
-      if(!selfClose) stack.push(node);
-    }
-    return rootNode;
-  }
-  function qa(node, path){
-    const parts = String(path).split(">").map(s=>s.trim()).filter(Boolean);
-    let cur = [node];
-    parts.forEach(tag=>{ const next=[]; cur.forEach(c=> c.children.forEach(ch=>{ if(ch.tag===tag) next.push(ch); })); cur = next; });
-    return cur;
-  }
-  function q(node, path){ return qa(node, path)[0] || null; }
-  /* find first node with tag anywhere below */
-  function find(node, tag){
-    for(const c of node.children){ if(c.tag===tag) return c; const r = find(c, tag); if(r) return r; }
-    return null;
-  }
-  function findAll(node, tag, out){ out = out||[]; node.children.forEach(c=>{ if(c.tag===tag) out.push(c); findAll(c, tag, out); }); return out; }
-  const api = {parseXmlTree, q, qa, find, findAll, decode};
-  if(typeof module!=="undefined" && module.exports) module.exports = api;
-  else root.XmlTree = api;
-})(typeof window!=="undefined" ? window : globalThis);
-
-</script>
 <script>/* ===== inlined module: labels.js ===== */
 /*
  * labels.js — label placement engine for engineering drawings.
@@ -1141,971 +1054,7 @@ button.link:hover{color:var(--accent)}
 });
 
 </script>
-<script>/* ===== inlined module: fatf.js ===== */
-/* fatf.js — dependency-free port of CadSoft "fabmasterF360.ulp"
- * ("Generate EAGLE Output in Fabmaster Format FATF REV 11.1", ULP V1.46)
- * to JavaScript, reading a Fusion 360 / EAGLE 9 XML .brd file.
- *
- *   buildFATF(xmlText, opts) -> { text: string, warnings: string[] }
- *   opts = { jobname, dateString, jobDateString, date, ulpName }
- *
- * Node:    const buildFATF = require('./fatf.js');   (also .buildFATF)
- * Browser: <script src="xmltree.js"><\/script><script src="fatf.js"><\/script>
- *          window.buildFATF(xml, opts)
- *
- * The ULP is reproduced function by function (see fatf_notes.md). Every
- * printf format string is copied verbatim; the UL objects the ULP walks
- * (UL_CONTACT, UL_PAD, UL_SMD, UL_ARC, ...) are reconstructed from the XML.
- */
-(function (root) {
-  'use strict';
-  const XT = (typeof XmlTree !== 'undefined') ? XmlTree : require('./xmltree.js');
 
-  // ------------------------------------------------------------------ constants
-  // EAGLE internal unit. EAGLE 6+/Fusion stores coordinates at 1/320000 mm
-  // (1 mil = 8128 units; every coordinate in the sample boards is an exact
-  // multiple). The task statement quotes 1/10000 mm (EAGLE <= 5) — the only
-  // observable difference is the truncation of reals passed into the ULP's
-  // `int u2u(int x)`, which is well below 1 mil either way.
-  const IU = 320000;
-  const UNITS_PER_MIL = IU * 254 / 10000;       // 8128
-  const toInt = Math.trunc;                     // UL real -> int conversion (C-style)
-  const PI = Math.PI;
-  const DELTA = 5;                              // real delta = 5 (arc step in degrees)
-  const ULP_VERSION = 'V1.46';
-  const ULP_FILENAME = 'fabmasterF360.ulp';
-  const LAYER_DIMENSION = 20;
-
-  // UL enum values: PAD_SHAPE_SQUARE=0 ROUND=1 OCTAGON=2 LONG=3 OFFSET=4
-  const PAD_SHAPE = { square: 0, round: 1, octagon: 2, long: 3, offset: 4 };
-  const PAD_SHAPE_OCTAGON = 2, PAD_SHAPE_LONG = 3, PAD_SHAPE_OFFSET = 4;
-  // VIA_SHAPE_SQUARE=0 ROUND=1 OCTAGON=2
-  const VIA_SHAPE = { square: 0, round: 1, octagon: 2 };
-  const padshape = ['P_ROUND', 'P_ROUND', 'P_ROUND', 'P_ROUND', 'P_ROUND'];
-  const viashape = ['P_BLOCK', 'P_ROUND', 'P_ROUND', 'P_ROUND', 'P_ROUND'];
-
-  // eagle -> fabmaster layer conversion (index = EAGLE layer 0..52)
-  const flayer = [0, 2, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 1, 0, 16, 16, 17, 0, 0, 18, 19, 20, 21,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 17];
-
-  const MIRROR_LAYER = { 1: 16, 16: 1, 21: 22, 22: 21, 23: 24, 24: 23, 25: 26, 26: 25, 27: 28, 28: 27,
-    29: 30, 30: 29, 31: 32, 32: 31, 33: 34, 34: 33, 35: 36, 36: 35, 37: 38, 38: 37, 39: 40, 40: 39,
-    41: 42, 42: 41, 51: 52, 52: 51 };
-
-  const LAYER_NAMES = [
-    '"DRILL PAD",COMMON,0,ELECTRICAL;',          // layer 1
-    '"TOP",TOP,3,ELECTRICAL;',
-    '"BOTTOM",BOTTOM,2,ELECTRICAL;',
-    '"ROUTE2",TRANSPARENT,0,ELECTRICAL;',
-    '"ROUTE3",TRANSPARENT,0,ELECTRICAL;',
-    '"ROUTE4",TRANSPARENT,0,ELECTRICAL;',
-    '"ROUTE5",TRANSPARENT,0,ELECTRICAL;',
-    '"POWER1",TRANSPARENT,0,ELECTRICAL;',
-    '"DRILLH",TRANSPARENT,0,DOCUMENTATION;',     // layer 9
-    '"POWER2",TRANSPARENT,0,DOCUMENTATION;',
-    '"DRILL",TRANSPARENT,0,DOCUMENTATION;',
-    '"THERMAL_2",TRANSPARENT,0,DOCUMENTATION;',
-    '"FORMAT",TRANSPARENT,0,BOARD_CUTOUT;',
-    '"THERMAL_1",TRANSPARENT,0,DOCUMENTATION;',
-    '"THERMAL",TRANSPARENT,0,DOCUMENTATION;',
-    '"TPLACE",TOP,17,ASSEMBLY;',                 // 16
-    '"BPLACE",BOTTOM,16,ASSEMBLY;',
-    '"TNAMES",TOP,19,DOCUMENTATION;',
-    '"BNAMES",BOTTOM,18,DOCUMENTATION;',
-    '"TVALUES",TOP,21,DOCUMENTATION;',
-    '"BVALUES",BOTTOM,20,DOCUMENTATION;'
-  ];
-
-  // ------------------------------------------------------------------ UL helpers
-  function u2mil(n) { return n / UNITS_PER_MIL; }            // real u2mil(int)
-  function u2u(x) { return toInt(u2mil(toInt(x))); }         // int u2u(int x) { return u2mil(x); }
-  function deg2arc(x) { return toInt(x) * PI / 180; }        // real deg2arc(int x) -- NB int parameter
-  function fablayer(l) { return flayer[l] || 0; }
-  function pad2(n) { return (n < 10 ? '0' : '') + n; }        // %02d
-
-  // C printf("%.0f") : round half to even, "-0" for negative values rounding to zero
-  function fmtF0(v) {
-    if (!isFinite(v)) return String(v);
-    const f = Math.floor(v), diff = v - f;
-    let r;
-    if (diff > 0.5) r = f + 1; else if (diff < 0.5) r = f; else r = (f % 2 === 0) ? f : f + 1;
-    if (r === 0 && (v < 0 || Object.is(v, -0))) return '-0';
-    return String(r);
-  }
-  // C printf("%d") with an int argument
-  function fmtD(v) { v = toInt(v); return v === 0 ? '0' : String(v); }
-  // C printf("%.d") : precision 0 -> value 0 prints as empty string
-  function fmtDotD(v) { v = toInt(v); return v === 0 ? '' : String(v); }
-
-  function validname(s) {
-    let r = '';
-    for (let i = 0; i < s.length; i++) {
-      const c = s[i];
-      r += (c === ',' || c === ';' || c === ')' || c === '(') ? '_' : c;
-    }
-    return r;
-  }
-
-  function u2ang(x, mirror) {
-    if (mirror) {
-      let m = 360 - x;
-      if (m > 180) m -= 180; else m += 180;
-      x = Math.round((360 - m) * 10);   // clockwise in FABMASTER!!!
-    } else {
-      x = Math.round((360 - x) * 10);
-    }
-    return toInt(x);
-  }
-
-  function Xneu(Xalt, Yalt, Xorigin, Yorigin, UserWinkel) {
-    const RADIUS = Math.sqrt(((Xalt - Xorigin) * (Xalt - Xorigin)) + ((Yalt - Yorigin) * (Yalt - Yorigin)));
-    let W;
-    if ((Xalt > Xorigin) && (Yalt >= Yorigin)) { W = Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    if ((Xalt < Xorigin) && (Yalt >= Yorigin)) { W = Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    if ((Xalt < Xorigin) && (Yalt < Yorigin)) { W = 360 - Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    if ((Xalt > Xorigin) && (Yalt < Yorigin)) { W = 360 - Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    if ((Xalt === Xorigin) && (Yalt === Yorigin)) { W = (Xalt - Xorigin) + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    if ((Xalt === Xorigin) && (Yalt > Yorigin)) { W = (Xalt - Xorigin + 90) + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    if ((Xalt === Xorigin) && (Yalt < Yorigin)) { W = (Xalt - Xorigin + 270) + UserWinkel; return RADIUS * Math.cos(PI / 180 * W); }
-    return 0;
-  }
-  function Yneu(Xalt, Yalt, Xorigin, Yorigin, UserWinkel) {
-    const RADIUS = Math.sqrt(((Xalt - Xorigin) * (Xalt - Xorigin)) + ((Yalt - Yorigin) * (Yalt - Yorigin)));
-    let W;
-    if ((Xalt > Xorigin) && (Yalt >= Yorigin)) { W = Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    if ((Xalt < Xorigin) && (Yalt >= Yorigin)) { W = Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    if ((Xalt < Xorigin) && (Yalt < Yorigin)) { W = 360 - Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    if ((Xalt > Xorigin) && (Yalt < Yorigin)) { W = 360 - Math.acos((Xalt - Xorigin) / RADIUS) * 57.29578 + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    if ((Xalt === Xorigin) && (Yalt === Yorigin)) { W = (Xalt - Xorigin) + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    if ((Xalt === Xorigin) && (Yalt > Yorigin)) { W = (Xalt - Xorigin + 90) + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    if ((Xalt === Xorigin) && (Yalt < Yorigin)) { W = (Xalt - Xorigin + 270) + UserWinkel; return RADIUS * Math.sin(PI / 180 * W); }
-    return 0;
-  }
-
-  // UL_ARC reconstruction: start point (x1,y1) sits at angle1, arc runs
-  // counter-clockwise to (x2,y2) at angle2 = angle1 + |curve|.
-  function arcOf(w) {
-    const dx = w.x2 - w.x1, dy = w.y2 - w.y1;
-    const chord = Math.sqrt(dx * dx + dy * dy);
-    const ac = Math.abs(w.curve);
-    if (!chord || !ac) return null;
-    const half = ac * PI / 360;
-    const radius = chord / 2 / Math.sin(half);
-    const d = chord / 2 / Math.tan(half);
-    const s = w.curve > 0 ? 1 : -1;
-    const xc = (w.x1 + w.x2) / 2 + s * d * (-dy / chord);
-    const yc = (w.y1 + w.y2) / 2 + s * d * (dx / chord);
-    const sx = w.curve > 0 ? w.x1 : w.x2, sy = w.curve > 0 ? w.y1 : w.y2;
-    const ex = w.curve > 0 ? w.x2 : w.x1, ey = w.curve > 0 ? w.y2 : w.y1;
-    let angle1 = Math.atan2(sy - yc, sx - xc) * 180 / PI;
-    if (angle1 < 0) angle1 += 360;
-    if (angle1 >= 360) angle1 -= 360;
-    return { x1: sx, y1: sy, x2: ex, y2: ey, xc: xc, yc: yc, radius: radius, angle1: angle1, angle2: angle1 + ac };
-  }
-
-  function strtol(s) { const m = /^\s*[+-]?\d+/.exec(String(s)); return m ? parseInt(m[0], 10) : 0; }
-
-  // ------------------------------------------------------------------ XML -> board model
-  function num(s, def) { const v = parseFloat(s); return isNaN(v) ? def : v; }
-  function iu(s) { return Math.round(num(s, 0) * IU); }       // mm -> internal units (int)
-  function rotOf(s) {
-    s = String(s || '');
-    const m = /R\s*(-?[\d.]+)/i.exec(s);
-    return { mirror: /M/.test(s), angle: m ? parseFloat(m[1]) : 0 };
-  }
-  // <text ratio>: DTD default 8 only when the attribute is absent; "0" is a legal value
-  // (T.ratio == 0 in the ULP) and must not fall back to 8.
-  function ratioOf(s) { const r = parseInt(s, 10); return isNaN(r) ? 8 : r; }
-  function parseLen(v) {   // design-rule value with unit -> mm
-    const m = /^\s*(-?[\d.]+)\s*([a-zA-Z]*)/.exec(String(v));
-    if (!m) return NaN;
-    const x = parseFloat(m[1]), u = m[2].toLowerCase();
-    if (u === 'mil') return x * 0.0254;
-    if (u === 'inch' || u === 'in') return x * 25.4;
-    if (u === 'mic' || u === 'um') return x / 1000;
-    return x;   // mm or unit-less
-  }
-
-  function parsePackage(node, libName) {
-    const pkg = { name: node.attrs.name || '', library: libName, wires: [], circles: [], rectangles: [], texts: [], contacts: [] };
-    node.children.forEach(function (c) {
-      const a = c.attrs;
-      switch (c.tag) {
-        case 'wire':
-          pkg.wires.push({ x1: iu(a.x1), y1: iu(a.y1), x2: iu(a.x2), y2: iu(a.y2), width: iu(a.width), layer: parseInt(a.layer, 10) || 0, curve: num(a.curve, 0) });
-          break;
-        case 'circle':
-          pkg.circles.push({ x: iu(a.x), y: iu(a.y), radius: iu(a.radius), width: iu(a.width), layer: parseInt(a.layer, 10) || 0 });
-          break;
-        case 'rectangle':
-          pkg.rectangles.push({ x1: iu(a.x1), y1: iu(a.y1), x2: iu(a.x2), y2: iu(a.y2), layer: parseInt(a.layer, 10) || 0, angle: rotOf(a.rot).angle });
-          break;
-        case 'text':
-          pkg.texts.push({ x: iu(a.x), y: iu(a.y), size: iu(a.size), ratio: ratioOf(a.ratio), layer: parseInt(a.layer, 10) || 0, value: c.text });
-          break;
-        case 'pad':
-          pkg.contacts.push({ kind: 'pad', name: a.name || '', x: iu(a.x), y: iu(a.y), drill: iu(a.drill), diameterSpec: iu(a.diameter),
-            shapeName: (a.shape || 'round').toLowerCase(), angle: rotOf(a.rot).angle, first: a.first === 'yes' });   // PAD_FLAG_FIRST
-          break;
-        case 'smd':
-          pkg.contacts.push({ kind: 'smd', name: a.name || '', x: iu(a.x), y: iu(a.y), dx: iu(a.dx), dy: iu(a.dy), layer: parseInt(a.layer, 10) || 1,
-            roundness: parseInt(a.roundness, 10) || 0, angle: rotOf(a.rot).angle });
-          break;
-        default: break;   // hole, polygon, description, ... : not used by the ULP
-      }
-    });
-    return pkg;
-  }
-
-  function parseBoard(xmlText) {
-    const doc = XT.parseXmlTree(xmlText);
-    const eagle = XT.find(doc, 'eagle');
-    const board = XT.find(doc, 'board');
-    if (!board) throw new Error('No <board> element found in XML');
-    const ver = /^(\d+)\.(\d+)/.exec((eagle && eagle.attrs.version) || '');
-    const B = {
-      version: ver ? parseInt(ver[1], 10) : 9,
-      release: ver ? parseInt(ver[2], 10) : 0,
-      rules: {}, libraries: [], elements: [], plainWires: [], plainTexts: [], signals: []
-    };
-    XT.qa(board, 'designrules > param').forEach(function (p) { B.rules[p.attrs.name] = p.attrs.value; });
-
-    XT.qa(board, 'libraries > library').forEach(function (l) {
-      const lib = { name: l.attrs.name || '', urn: l.attrs.urn || '', packages: [] };
-      XT.qa(l, 'packages > package').forEach(function (p) { lib.packages.push(parsePackage(p, lib.name)); });
-      B.libraries.push(lib);
-    });
-    function findPackage(el) {
-      const a = el.attrs;
-      let libs = B.libraries.filter(function (l) { return l.name === a.library; });
-      if (a.library_urn) {
-        const exact = libs.filter(function (l) { return l.urn === a.library_urn; });
-        if (exact.length) libs = exact;
-      }
-      for (let i = 0; i < libs.length; i++) {
-        const p = libs[i].packages.find(function (pk) { return pk.name === a.package; });
-        if (p) return p;
-      }
-      return null;
-    }
-    const plain = XT.q(board, 'plain');
-    if (plain) plain.children.forEach(function (c) {
-      const a = c.attrs;
-      if (c.tag === 'wire') B.plainWires.push({ x1: iu(a.x1), y1: iu(a.y1), x2: iu(a.x2), y2: iu(a.y2), width: iu(a.width), layer: parseInt(a.layer, 10) || 0, curve: num(a.curve, 0) });
-      else if (c.tag === 'text') B.plainTexts.push({ x: iu(a.x), y: iu(a.y), size: iu(a.size), ratio: ratioOf(a.ratio), layer: parseInt(a.layer, 10) || 0, value: c.text });
-    });
-    XT.qa(board, 'elements > element').forEach(function (e) {
-      const a = e.attrs, r = rotOf(a.rot);
-      B.elements.push({ name: a.name || '', value: a.value || '', library: a.library || '', packageName: a.package || '',
-        x: iu(a.x), y: iu(a.y), angle: r.angle, mirror: r.mirror, pkg: findPackage(e) });
-    });
-    XT.qa(board, 'signals > signal').forEach(function (s) {
-      const sig = { name: s.attrs.name || '', contactrefs: [], wires: [], vias: [], polygons: [] };
-      s.children.forEach(function (c) {
-        const a = c.attrs;
-        if (c.tag === 'contactref') sig.contactrefs.push({ element: a.element || '', pad: a.pad || '' });
-        else if (c.tag === 'wire') sig.wires.push({ x1: iu(a.x1), y1: iu(a.y1), x2: iu(a.x2), y2: iu(a.y2), width: iu(a.width), layer: parseInt(a.layer, 10) || 0, curve: num(a.curve, 0) });
-        else if (c.tag === 'via') sig.vias.push({ x: iu(a.x), y: iu(a.y), drill: iu(a.drill), diameterSpec: iu(a.diameter), shapeName: (a.shape || 'round').toLowerCase(), extent: a.extent || '1-16' });
-        else if (c.tag === 'polygon') {
-          const poly = { layer: parseInt(a.layer, 10) || 0, width: iu(a.width), vertices: [] };
-          c.children.forEach(function (v) { if (v.tag === 'vertex') poly.vertices.push({ x: iu(v.attrs.x), y: iu(v.attrs.y), curve: num(v.attrs.curve, 0) }); });
-          sig.polygons.push(poly);
-        }
-      });
-      B.signals.push(sig);
-    });
-    return B;
-  }
-
-  // ------------------------------------------------------------------ generator
-  function buildFATF(xmlText, opts) {
-    opts = opts || {};
-    const warnings = [];
-    const B = parseBoard(xmlText);
-    const out = [];
-    function P(s) { out.push(s); }
-
-    // ---- design-rule driven UL properties -------------------------------
-    function ruleLen(name, defMm) { const v = B.rules[name]; if (v === undefined) return defMm; const x = parseLen(v); return isNaN(x) ? defMm : x; }
-    function ruleNum(name, def) { const v = B.rules[name]; if (v === undefined) return def; const x = parseFloat(v); return isNaN(x) ? def : x; }
-    function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
-
-    // C.pad.diameter[layer]: max(library diameter, drill + 2 * restring)
-    function padDiameter(c, layer) {
-      const side = layer === 16 ? 'Bottom' : (layer === 1 ? 'Top' : 'Inner');
-      const drill = c.drill / IU, spec = c.diameterSpec / IU;
-      const ring = clamp(drill * ruleNum('rvPad' + side, 0.25), ruleLen('rlMinPad' + side, 0.254), ruleLen('rlMaxPad' + side, 0.508));
-      return Math.round(Math.max(spec, drill + 2 * ring) * IU);
-    }
-    // C.pad.shape[layer]: UL returns the shape "calculated according to the Design
-    // Rules" for LAYER_TOP/LAYER_BOTTOM: DRC 'Shapes' psFirst overrides the shape of
-    // pads flagged first="yes", psTop / psBottom override it on layer 1 / 16
-    // (-1 = "as in library"; 0 square, 1 round, 2 octagon = the PAD_SHAPE_ enum).
-    function padShape(c, layer) {
-      const lib = PAD_SHAPE[c.shapeName], libShape = lib === undefined ? PAD_SHAPE.round : lib;
-      if (layer !== 1 && layer !== 16) return libShape;
-      if (c.first) { const f = ruleNum('psFirst', -1); if (f >= 0) return toInt(f); }
-      const side = ruleNum(layer === 1 ? 'psTop' : 'psBottom', -1);
-      return side >= 0 ? toInt(side) : libShape;
-    }
-    function padElongation(c) {
-      if (c.shapeName === 'long') return ruleNum('psElongationLong', 100);
-      if (c.shapeName === 'offset') return ruleNum('psElongationOffset', 100);
-      return 0;
-    }
-    // V.diameter[layer], V.shape[layer]
-    function viaDiameter(v /*, layer */) {
-      const drill = v.drill / IU, spec = v.diameterSpec / IU;
-      const ring = clamp(drill * ruleNum('rvViaOuter', 0.25), ruleLen('rlMinViaOuter', 0.2032), ruleLen('rlMaxViaOuter', 0.508));
-      return Math.round(Math.max(spec, drill + 2 * ring) * IU);
-    }
-    function viaShape(v) { const s = VIA_SHAPE[v.shapeName]; return s === undefined ? VIA_SHAPE.round : s; }
-
-    // E.package.<primitives> in board coordinates (element transform)
-    // EAGLE placement: rotate CCW by the element angle FIRST, then mirror about the
-    // Y axis (p' = M * R(angle) * p), then translate. Verified against
-    // a sample board: for every contactref of a mirrored MR90 element the pad
-    // centre computed this way coincides with a same-signal wire endpoint (18/18);
-    // mirror-before-rotate only matches 3/18.
-    function xformPoint(E, x, y) {
-      const a = E.angle * PI / 180, c = Math.cos(a), s = Math.sin(a);
-      let rx = x * c - y * s;
-      const ry = x * s + y * c;
-      if (E.mirror) rx = -rx;
-      return [Math.round(rx) + E.x, Math.round(ry) + E.y];
-    }
-    function xformWire(E, w) {
-      const p1 = xformPoint(E, w.x1, w.y1), p2 = xformPoint(E, w.x2, w.y2);
-      return { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], width: w.width,
-        layer: E.mirror ? (MIRROR_LAYER[w.layer] || w.layer) : w.layer, curve: E.mirror ? -w.curve : w.curve };
-    }
-    function elementContacts(E) { return E.pkg ? E.pkg.contacts : []; }
-
-    // ---- state shared across sections (ULP globals) ---------------------
-    const t = [];          // padtypes
-    const pst = [];        // padstacktypes
-    const shapename = [];  // package names
-    const sizes = [], ratio = [];  // fonts
-    let boardroundness = 100;
-    let xmin = 32000, xmax = 0, ymin = 32000, ymax = 0;
-    let gi = 0;            // the ULP's global `i` (used by board_data contours)
-    let negCount = 0;
-    let skippedTextStrokes = 0;
-    let polygonContours = 0;
-    function cc(v) { if (v < 0) negCount++; return v; }   // board-coordinate check
-
-    // ---- ULP helper functions -------------------------------------------
-    function padtype(C) {
-      let s = '';
-      if (C.kind === 'pad') {
-        let pdi = u2u(padDiameter(C, 16));
-        const sh = padShape(C, 16);
-        if (sh === PAD_SHAPE.round || sh === PAD_SHAPE.octagon || sh === PAD_SHAPE.square) {
-          s = padshape[sh] + ' (' + fmtD(pdi) + ');';
-        } else if (sh === PAD_SHAPE.long) {
-          pdi = toInt(pdi / 2);
-          s = padshape[sh] + ' (' + fmtD(pdi) + ');';
-        } else if (sh === PAD_SHAPE.offset) {
-          pdi = toInt(pdi / 2);
-          s = padshape[sh] + ' (' + fmtD(pdi) + ');';
-        }
-      }
-      return s;
-    }
-    function padindex(C) { const i = t.indexOf(padtype(C)); return i >= 0 ? i + 1 : t.length; }
-    function padstacktype(C) { return 'P_' + fmtD(u2u(C.drill)) + '_' + fmtD(padindex(C)); }
-    function padstackindex(C) { const i = pst.indexOf(padstacktype(C)); return i >= 0 ? i + 1 : pst.length; }
-
-    function viatype(V) {
-      let s = '';
-      const pdi = u2u(viaDiameter(V, 16));
-      const sh = viaShape(V);
-      if (sh === VIA_SHAPE.round || sh === VIA_SHAPE.octagon) {
-        s = viashape[sh] + ' (' + fmtD(pdi) + ');';
-      }
-      if (sh === VIA_SHAPE.square) {
-        const x1 = Math.round(toInt(-pdi / 2)), y1 = Math.round(toInt(-pdi / 2));
-        const x2 = Math.round(toInt(pdi / 2)), y2 = Math.round(toInt(pdi / 2));
-        s = viashape[sh] + ' (' + fmtD(x1) + ',' + fmtD(y1) + ',' + fmtD(x2) + ',' + fmtD(y2) + ');';
-      }
-      return s;
-    }
-    function viaindex(V) { const i = t.indexOf(viatype(V)); return i >= 0 ? i + 1 : t.length; }
-    function viastacktype(V) { return 'P_' + fmtD(u2u(V.drill)) + '_' + fmtD(viaindex(V)); }
-    function viastackindex(V) { const i = pst.indexOf(viastacktype(V)); return i >= 0 ? i + 1 : pst.length; }
-
-    function drawpadpoly(dx, dy, xo, yo, angle, roundness, elong, padtypeId) {
-      const a = angle;
-      if (roundness) {
-        let r, l;
-        if (dx <= dy) { r = dx; l = dy; } else { r = dy; l = dx; }
-        if (roundness === 100) {   // rounded pad
-          const rad = PI / 180 * a, rad1 = PI / 180 * (a + 180);
-          let x1, y1, x2, y2;
-          if (padtypeId === PAD_SHAPE_OFFSET) {
-            x1 = 0; y1 = 0;
-            x2 = u2u(Math.cos(rad) * (r * elong / 100));
-            y2 = u2u(Math.sin(rad) * (r * elong / 100));
-          } else if (padtypeId === PAD_SHAPE_LONG) {
-            x1 = u2u(Math.cos(rad) * ((r * elong / 100) / 2));
-            y1 = u2u(Math.sin(rad) * ((r * elong / 100) / 2));
-            x2 = u2u(Math.cos(rad1) * ((r * elong / 100) / 2));
-            y2 = u2u(Math.sin(rad1) * ((r * elong / 100) / 2));
-          } else {   // SMD  ((l-r)/2 is int division in UL)
-            const h = toInt((l - r) / 2);
-            x1 = u2u(Math.cos(rad) * h);
-            y1 = u2u(Math.sin(rad) * h);
-            x2 = u2u(Math.cos(rad1) * h);
-            y2 = u2u(Math.sin(rad1) * h);
-          }
-          return 'TRACK (' + fmtD(u2u(r)) + '(' + fmtF0(u2u(xo) + x1) + ',' + fmtF0(u2u(yo) + y1) + ')(' +
-            fmtF0(u2u(xo) + x2) + ',' + fmtF0(u2u(yo) + y2) + '))';
-        }
-        // octagon
-        const r1 = r * 0.56;
-        const hx = u2u(toInt(dx / 2)), hy = u2u(toInt(dy / 2));
-        const hxr = u2u((dx - r1) / 2), hyr = u2u((dy - r1) / 2);
-        const pt = function (px, py) {
-          return '(' + fmtF0(u2u(xo) + Xneu(px, py, 0, 0, a)) + ',' + fmtF0(u2u(yo) + Yneu(px, py, 0, 0, a)) + ')';
-        };
-        return 'POLYGON (' + pt(hx, hyr) + pt(hxr, hy) + '\n        ' +
-          pt(-hxr, hy) + pt(-hx, hyr) + '\n        ' +
-          pt(-hx, -hyr) + pt(-hxr, -hy) + '\n        ' +
-          pt(hxr, -hy) + pt(hx, -hyr) + '\n        ' +
-          pt(hx, hyr) + ')';
-      }
-      // rectangle
-      const hx = u2u(toInt(dx / 2)), hy = u2u(toInt(dy / 2));
-      const pt = function (px, py) {
-        return '(' + fmtF0(u2u(xo) + Xneu(px, py, 0, 0, a)) + ',' + fmtF0(u2u(yo) + Yneu(px, py, 0, 0, a)) + ')';
-      };
-      return 'POLYGON (' + pt(hx, hy) + pt(hx, -hy) + pt(-hx, -hy) + pt(-hx, hy) + pt(hx, hy) + ')';
-    }
-
-    function drawpad(C, l) {
-      let s = 'no pad!';
-      if (C.kind === 'pad') {
-        const sh = padShape(C, l), dia = padDiameter(C, l);
-        if (sh === PAD_SHAPE.round) {
-          s = 'ROUND (' + fmtD(u2u(dia)) + ',' + fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ')';
-        } else if (sh === PAD_SHAPE.square) {
-          s = drawpadpoly(dia, dia, C.x, C.y, C.angle, 0, 0, 0);
-        } else if (sh === PAD_SHAPE.octagon) {
-          s = drawpadpoly(dia, dia, C.x, C.y, C.angle, 50, padElongation(C), PAD_SHAPE_OCTAGON);
-        } else if (sh === PAD_SHAPE.long) {
-          s = drawpadpoly(dia * 2, dia, C.x, C.y, C.angle, 100, padElongation(C), PAD_SHAPE_LONG);
-        } else if (sh === PAD_SHAPE.offset) {
-          s = drawpadpoly(dia * 2, dia, C.x, C.y, C.angle, 100, padElongation(C), PAD_SHAPE_OFFSET);
-        }
-      } else {   // smd
-        let smd_roundnes = C.roundness;
-        if (smd_roundnes < boardroundness) smd_roundnes = boardroundness;
-        s = drawpadpoly(C.dx, C.dy, C.x, C.y, C.angle, smd_roundnes, 0, 0);
-      }
-      return s;
-    }
-
-    // pin_number / PAC_pin_number
-    function pinNumber(pkg, pinname) {
-      const contacts = pkg ? pkg.contacts : [];
-      let pad_is_numeric = 1;
-      contacts.forEach(function (CT) {
-        const s = CT.name;
-        for (let j = 0; j < s.length; j++) if (!(s[j] >= '0' && s[j] <= '9')) pad_is_numeric = 0;
-      });
-      if (pad_is_numeric) return pinname;
-      let padcount = 0;
-      for (let k = 0; k < contacts.length; k++) {
-        padcount++;
-        if (contacts[k].name === pinname) return String(padcount);
-      }
-      return '';
-    }
-    function realnet(S) { return S.contactrefs.length > 0 ? 1 : 0; }
-    function net_on_layer(S, layer) {
-      for (let i = 0; i < S.wires.length; i++) if (S.wires[i].layer === layer) return 1;
-      for (let i = 0; i < S.polygons.length; i++) if (S.polygons[i].layer === layer) return 1;
-      return 0;
-    }
-
-    // ---- header ----------------------------------------------------------
-    const now = opts.date instanceof Date ? opts.date : new Date();
-    const headerDate = (opts.dateString !== undefined && opts.dateString !== null) ? String(opts.dateString)
-      : pad2(now.getDate()) + '.' + pad2(now.getMonth() + 1) + '.' + pad2(now.getFullYear()) + ' ' +
-        pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds());
-    // NB: the ULP's JOB line uses t2month() WITHOUT +1 (0-based month) -- reproduced.
-    const jobDate = (opts.jobDateString !== undefined && opts.jobDateString !== null) ? String(opts.jobDateString)
-      : pad2(now.getDate()) + '-' + pad2(now.getMonth()) + '-' + pad2(now.getFullYear());
-    const jobname = (opts.jobname !== undefined && opts.jobname !== null) ? String(opts.jobname) : 'board';
-    const ulpName = opts.ulpName || ULP_FILENAME;
-
-    function create_header() {
-      P(';EAGLE ' + fmtD(B.version) + '.' + pad2(B.release) + ' ' + ulpName + ' ' + ULP_VERSION + ' FATF OUTPUT FILE   FABmaster(R)  ');
-      P(headerDate + '\n\n');
-      P(':FABMASTER FATF REV11.1;\n\n');
-      P(':UNITS = 1/1000 INCH\n');
-      P(':NOAUTOROTATE\n');
-    }
-
-    // ---- creat_pad_number_index ------------------------------------------
-    const elIndex = new Map();      // element name -> { nr, pads: Map(padname -> number) }
-    function creat_pad_number_index() {
-      B.elements.forEach(function (E, idx) {
-        const rec = { nr: idx + 1, pads: new Map() };
-        elementContacts(E).forEach(function (C) {
-          if (!rec.pads.has(C.name)) rec.pads.set(C.name, strtol(pinNumber(E.pkg, C.name)));
-        });
-        if (!elIndex.has(E.name)) elIndex.set(E.name, rec);
-      });
-    }
-    function getelnr(ename) { const r = elIndex.get(ename); return r ? r.nr : 0; }
-    function getpinr(ename, pname) { const r = elIndex.get(ename); if (!r) return 0; const v = r.pads.get(pname); return v === undefined ? 0 : v; }
-
-    // ---- get_roundness ---------------------------------------------------
-    function get_roundness(E) {
-      elementContacts(E).forEach(function (C) { if (C.kind === 'smd' && C.roundness < boardroundness) boardroundness = C.roundness; });
-    }
-
-    // ---- board_data ------------------------------------------------------
-    function contour(W) {
-      xmin = Math.min(u2u(W.x1), xmin); xmin = Math.min(u2u(W.x2), xmin);
-      ymin = Math.min(u2u(W.y1), ymin); ymin = Math.min(u2u(W.y2), ymin);
-      xmax = Math.max(u2u(W.x1), xmax); xmax = Math.max(u2u(W.x2), xmax);
-      ymax = Math.max(u2u(W.y1), ymax); ymax = Math.max(u2u(W.y2), ymax);
-      const arc = W.curve ? arcOf(W) : null;
-      if (arc) {
-        let x = arc.x1, y = arc.y1;
-        P('2,CONTOUR (');
-        P('(' + fmtD(cc(u2u(x))) + ',' + fmtD(cc(u2u(y))) + ',0)');
-        let angle = arc.angle1 + DELTA;
-        while (angle < arc.angle2) {
-          gi++;
-          if (gi === 1) P(',');
-          else if (gi === 2) { P(');\n2,CONTOUR ('); gi = 0; }
-          x = arc.xc + arc.radius * Math.cos(deg2arc(angle));
-          y = arc.yc + arc.radius * Math.sin(deg2arc(angle));
-          P('(' + fmtD(cc(u2u(x))) + ',' + fmtD(cc(u2u(y))) + ')');
-          xmin = Math.min(u2u(x), xmin); ymin = Math.min(u2u(y), ymin);
-          xmax = Math.max(u2u(x), xmax); ymax = Math.max(u2u(y), ymax);
-          angle += DELTA;
-        }
-        if (!gi) {
-          P('(' + fmtD(cc(u2u(arc.x2))) + ',' + fmtD(cc(u2u(arc.y2))) + ',0));\n');
-        } else {
-          P(');\n2,CONTOUR ((' + fmtD(u2u(x)) + ',' + fmtD(u2u(y)) + ',0)');
-          P(',(' + fmtD(cc(u2u(arc.x2))) + ',' + fmtD(cc(u2u(arc.y2))) + ',0));\n');
-        }
-        gi = 0;
-      } else {
-        P('2,CONTOUR (');
-        P('(' + fmtD(cc(u2u(W.x1))) + ',' + fmtD(cc(u2u(W.y1))) + ',0),(' + fmtD(cc(u2u(W.x2))) + ',' + fmtD(cc(u2u(W.y2))) + ',0)');
-        P(');\n');
-      }
-    }
-    function board_data() {
-      P('\n:BOARD_DATA\n');
-      P('1,JOB("' + jobname + '",,' + jobDate + ',);\n');
-      B.plainWires.forEach(function (W) { if (W.layer === LAYER_DIMENSION) contour(W); });
-      B.elements.forEach(function (E) {
-        if (!E.pkg) return;
-        E.pkg.wires.forEach(function (w) {
-          const W = xformWire(E, w);
-          if (W.layer === LAYER_DIMENSION) contour(W);
-        });
-      });
-      P('3,WORK_SPACE (' + fmtD(xmin) + ',' + fmtD(xmax) + ',' + fmtD(ymin) + ',' + fmtD(ymax) + ');\n');
-      P(':EOD\n');
-      P('\n:NOTRACE\n');
-    }
-
-    // ---- parts -----------------------------------------------------------
-    function parts() {
-      let i = 1;
-      P('\n:PARTS\n');
-      B.elements.forEach(function (E) {
-        P(fmtD(i++) + ',');
-        P(E.name + ',');
-        P('"' + E.value + '",');
-        P(validname(E.packageName + '__' + E.library) + ',');
-        P(fmtD(cc(u2u(E.x))) + ',' + fmtD(cc(u2u(E.y))) + ',');
-        P(fmtD(u2ang(E.angle, E.mirror)) + ',');
-        P(E.mirror ? 'B;' : 'T;');
-        P('\n');
-      });
-      P(':EOD\n');
-    }
-
-    // ---- pad_symbols -----------------------------------------------------
-    function pad_symbols() {
-      let j = 0;
-      P('\n:PAD_SYMBOLS\n\n');
-      B.elements.forEach(function (E) {
-        elementContacts(E).forEach(function (C) {
-          if (C.kind !== 'pad') return;
-          const pt = padtype(C);
-          if (t.indexOf(pt) < 0) { t[j] = pt; P(fmtD(j + 1) + ',' + pt + '\n'); j++; }
-        });
-      });
-      B.signals.forEach(function (S) {
-        S.vias.forEach(function (V) {
-          const vt = viatype(V);
-          if (t.indexOf(vt) < 0) { t[j] = vt; P(fmtD(j + 1) + ',' + vt + '\n'); j++; }
-        });
-      });
-      P(':EOD\n');
-    }
-
-    // ---- layer_names -----------------------------------------------------
-    function layer_names() {
-      P('\n:LAYER_NAMES\n');
-      LAYER_NAMES.forEach(function (l, i) { P(fmtD(i + 1) + ',' + l + '\n'); });
-      P(':EOD\n');
-      P('\n:LAYER_SETS\n');
-      P('1,"ALL",(1');
-      for (let i = 1; i < LAYER_NAMES.length; i++) P(',' + fmtD(i + 1));
-      P(');\n');
-      P(':EOD\n');
-    }
-
-    // ---- pad_stacks ------------------------------------------------------
-    function pad_stacks() {
-      let j = 0;
-      P('\n:PAD_STACKS\n');
-      B.elements.forEach(function (E) {
-        elementContacts(E).forEach(function (C) {
-          if (C.kind !== 'pad') return;
-          const st = padstacktype(C);
-          if (pst.indexOf(st) < 0) {
-            pst[j] = st;
-            P(fmtD(j + 1) + ',"' + st + '",' + fmtD(u2u(C.drill)) + ',P,((1,' + fmtD(padindex(C)) + '));\n');
-            j++;
-          }
-        });
-      });
-      B.signals.forEach(function (S) {
-        S.vias.forEach(function (V) {
-          const st = viastacktype(V);
-          if (pst.indexOf(st) < 0) {
-            pst[j] = st;
-            P(fmtD(j + 1) + ',"' + st + '",' + fmtD(u2u(V.drill)) + ',P,((1,' + fmtD(viaindex(V)) + '));\n');
-            j++;
-          }
-        });
-      });
-      P(':EOD\n');
-    }
-
-    // ---- pads ------------------------------------------------------------
-    function pads() {
-      let i = 0;
-      P('\n:PADS\n');
-      B.signals.forEach(function (S) {
-        if (realnet(S)) {
-          i++;
-          S.vias.forEach(function (V) { P(fmtD(i) + ',' + fmtD(viastackindex(V)) + ',((' + fmtD(cc(u2u(V.x))) + ',' + fmtD(cc(u2u(V.y))) + '));\n'); });
-        } else {
-          S.vias.forEach(function (V) { P('0,' + fmtD(viastackindex(V)) + ',((' + fmtD(cc(u2u(V.x))) + ',' + fmtD(cc(u2u(V.y))) + '));\n'); });
-        }
-      });
-      P(':EOD\n');
-    }
-
-    // ---- fonts -----------------------------------------------------------
-    function searchfont(tsize, tratio) {
-      for (let n = 0; n < sizes.length; n++) if (sizes[n] === tsize && ratio[n] === tratio) return n;
-      return -1;
-    }
-    function fonts() {
-      P('\n:FONTS\n');
-      P('1,"STANDARD",96,60,72,0;\n');
-      function add(T) { if (searchfont(T.size, T.ratio) < 0) { sizes.push(T.size); ratio.push(T.ratio); } }
-      B.plainTexts.forEach(add);
-      B.elements.forEach(function (E) { if (E.pkg) E.pkg.texts.forEach(add); });
-      for (let n = 0; n < sizes.length; n++) {
-        const sz = u2u(sizes[n]);
-        P(fmtD(n + 2) + ',"FONT_' + fmtD(n + 2) + '",' + fmtD(sz) + ',' + fmtF0(sz * 0.6) + ',' + fmtF0(sz * 0.72) + ',' +
-          fmtDotD(toInt(u2u(sizes[n] * ratio[n]) / 100)) + ';\n');
-      }
-      P(':EOD\n');
-    }
-
-    // ---- packages --------------------------------------------------------
-    function textStrokes(/* T */) {
-      // T.wires(W): EAGLE's vector-font strokes are not reproducible from the XML.
-      return '';
-    }
-    // ULP: printf("  0,LAYER (%d (\n"); T.wires(W) { printf("   TRACK (...)\n"); } printf("))\n");
-    // The ULP writes this block only to hold the font strokes and always puts at
-    // least one TRACK in it. Without strokes the block would be a LAYER record
-    // with no primitives -- a record the ULP never produces -- so it is omitted
-    // and counted in a warning instead.
-    function textBlock(T) {
-      const strokes = textStrokes(T);
-      if (!strokes) { skippedTextStrokes++; return; }
-      P('  0,LAYER (' + fmtD(fablayer(T.layer)) + ' (\n');
-      P(strokes);
-      P('))\n');
-    }
-    function packageWire(W) {
-      const arc = W.curve ? arcOf(W) : null;
-      let s;
-      if (arc) {
-        s = '   TRACK (' + fmtD(u2u(W.width)) + ',(' + fmtD(u2u(arc.x1)) + ',' + fmtD(u2u(arc.y1)) + '),';
-        let angle = arc.angle1 + DELTA;
-        while (angle < arc.angle2) {
-          s += '\n           (' + fmtD(u2u(arc.xc + arc.radius * Math.cos(deg2arc(angle)))) + ',' +
-            fmtD(u2u(arc.yc + arc.radius * Math.sin(deg2arc(angle)))) + '),';
-          angle += DELTA;
-        }
-        s += '(' + fmtD(u2u(arc.x2)) + ',' + fmtD(u2u(arc.y2)) + '))';
-      } else {
-        s = '   TRACK (' + fmtD(u2u(W.width)) + ',(' + fmtD(u2u(W.x1)) + ',' + fmtD(u2u(W.y1)) + '),' +
-          '(' + fmtD(u2u(W.x2)) + ',' + fmtD(u2u(W.y2)) + '))';
-      }
-      return s;
-    }
-    function packages() {
-      let sx = 0;
-      P('\n:PACKAGES\n');
-      B.libraries.forEach(function (LBR) {
-        LBR.packages.forEach(function (Pk) {
-          const vn = validname(Pk.name + '__' + Pk.library);
-          if (shapename.indexOf(vn) >= 0) return;   // package name exists
-          shapename[sx] = vn;
-          const id = sx;    // ULP: `for (i = 0; shapename[i]; i++)` leaves i == count -> 0-based IDs
-          sx++;
-          P(fmtD(id) + ',');
-          P('"' + vn + '",');
-          P(',,,\n');
-          let j = 0, k = 0;
-          Pk.contacts.forEach(function (C) {
-            if (k === 0) P(' (PINS ');
-            k++;
-            P('(' + pinNumber(Pk, C.name) + ',,' + fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ',');
-            P(C.kind === 'pad' ? 'D)' : 'T)');
-            j++;
-            if (j > 2) { P('\n       '); j = 0; }
-          });
-          if (k !== 0) P(')\n');
-          j = 0;
-          P(' (');
-          Pk.contacts.forEach(function (C) {
-            if (C.kind === 'pad') {
-              if (j > 0) P('  ');
-              P(pinNumber(Pk, C.name) + ',PAD (' + fmtD(padstackindex(C)) + ' ((' + fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ')))\n');
-              j++;
-            }
-          });
-          j = 0;
-          Pk.contacts.forEach(function (C) {
-            if (C.kind === 'pad') {
-              P('  ' + pinNumber(Pk, C.name) + ',LAYER (' + fmtD(fablayer(1)) + ' (\n');
-              P('   ' + drawpad(C, 1) + '))\n');
-              P('  ' + pinNumber(Pk, C.name) + ',LAYER (' + fmtD(fablayer(16)) + ' (\n');
-              P('   ' + drawpad(C, 16) + '))\n');
-            } else {
-              if (j > 0) P('  ');
-              if (C.layer === 1) {
-                P(pinNumber(Pk, C.name) + ',LAYER (' + fmtD(fablayer(1)) + ' (\n');
-                P('   ' + drawpad(C, 1) + '))\n');
-              } else {
-                P(pinNumber(Pk, C.name) + ',LAYER (' + fmtD(fablayer(16)) + ' (\n');
-                P('   ' + drawpad(C, 16) + '))\n');
-              }
-            }
-            j++;
-          });
-
-          // circles etc. on top and bottom side
-          Pk.circles.forEach(function (C) {
-            if (C.layer === 1 || C.layer === 16) {
-              P('\n  0,LAYER (' + fmtD(fablayer(C.layer)) + ' (\n');
-              let RminRmax = C.radius - C.width;
-              if (!C.width || RminRmax < 0) {
-                RminRmax = toInt(C.width / 2);
-                P('   ROUND (' + fmtD(u2u((C.radius + RminRmax) * 2)) + ',' + fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ')');
-              } else {
-                P('   CIRCLE (' + fmtD(u2u(C.radius) + toInt(u2u(C.width) / 2)) + ',' + fmtD(u2u(C.radius) - toInt(u2u(C.width) / 2)) + ',' +
-                  fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ')');
-              }
-              P('))\n');
-            }
-          });
-          Pk.rectangles.forEach(function (W) {
-            if (W.layer === 1 || W.layer === 16) {
-              P('\n  0,LAYER (' + fmtD(fablayer(W.layer)) + ' (\n');
-              const rectcenterx = toInt((W.x1 + W.x2) / 2), rectcentery = toInt((W.y1 + W.y2) / 2);
-              const rectx = W.x2 - W.x1, recty = W.y2 - W.y1;
-              P('   ' + drawpadpoly(rectx, recty, rectcenterx, rectcentery, W.angle, 0, 0, 0));
-              P('))\n');
-            }
-          });
-          Pk.texts.forEach(function (T) {
-            if (T.layer === 1 || T.layer === 16) textBlock(T);
-          });
-
-          // wires on copper / place / docu layers
-          Pk.wires.forEach(function (W) {
-            if (W.layer === 1 || W.layer === 16 || W.layer === 21 || W.layer === 22 || W.layer === 51 || W.layer === 52) {
-              P('  0,LAYER (' + fmtD(fablayer(W.layer)) + ' (\n');
-              P(packageWire(W));
-              P('))\n');
-            }
-          });
-          Pk.rectangles.forEach(function (W) {
-            if (W.layer === 21 || W.layer === 22 || W.layer === 51 || W.layer === 52) {
-              P('  0,LAYER (' + fmtD(fablayer(W.layer)) + ' (\n');
-              const rectcenterx = toInt((W.x1 + W.x2) / 2), rectcentery = toInt((W.y1 + W.y2) / 2);
-              const rectx = W.x2 - W.x1, recty = W.y2 - W.y1;
-              P(drawpadpoly(rectx, recty, rectcenterx, rectcentery, W.angle, 0, 0, 0));
-              P('))\n');
-            }
-          });
-          Pk.circles.forEach(function (C) {
-            if (C.layer === 21 || C.layer === 22 || C.layer === 51 || C.layer === 52) {
-              P('  0,LAYER (' + fmtD(fablayer(C.layer)) + ' (\n');
-              let RminRmax = C.radius - C.width;
-              if (!C.width || RminRmax < 0) {
-                RminRmax = toInt(C.width / 2);
-                P('   ROUND (' + fmtD(u2u((C.radius + RminRmax) * 2)) + ',' + fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ')\n');
-              } else {
-                P('   CIRCLE (' + fmtD(u2u(C.radius) + toInt(u2u(C.width) / 2)) + ',' + fmtD(u2u(C.radius) - toInt(u2u(C.width) / 2)) + ',' +
-                  fmtD(u2u(C.x)) + ',' + fmtD(u2u(C.y)) + ')\n');
-              }
-              P('))\n');
-            }
-          });
-          Pk.texts.forEach(function (T) {
-            if (T.layer === 1 || T.layer === 16 || T.layer === 21 || T.layer === 22 || T.layer === 51 || T.layer === 52) textBlock(T);
-          });
-          P(');\n');
-        });
-      });
-      P(':EOD\n');
-    }
-
-    // ---- layer -----------------------------------------------------------
-    function layer() {
-      P('\n:LAYERS\n');
-      let i = 0;
-      B.signals.forEach(function (S) {
-        if (!realnet(S)) return;
-        ++i;
-        for (let lay = 1; lay <= 16; lay++) {
-          if (net_on_layer(S, lay) && fablayer(lay) > 0) {
-            P(fmtD(i) + ',LAYER (' + fmtD(fablayer(lay)) + ', (\n');
-            S.wires.forEach(function (W) {
-              if (lay !== W.layer) return;
-              const arc = W.curve ? arcOf(W) : null;
-              if (arc) {
-                let x = arc.x1, y = arc.y1;
-                P('  TRACK (' + fmtD(u2u(W.width)) + ',(' + fmtD(cc(u2u(x))) + ',' + fmtD(cc(u2u(y))) + ')');
-                let angle = arc.angle1 + DELTA;
-                while (angle < arc.angle2) {
-                  x = arc.xc + arc.radius * Math.cos(deg2arc(angle));
-                  y = arc.yc + arc.radius * Math.sin(deg2arc(angle));
-                  P(',\n           (' + fmtD(cc(u2u(x))) + ',' + fmtD(cc(u2u(y))) + ')');
-                  angle += DELTA;
-                }
-                // "Comma ends the last line 2013-07-01" -- no trailing newline in the ULP
-                P(',\n           (' + fmtD(cc(u2u(arc.x2))) + ',' + fmtD(cc(u2u(arc.y2))) + '))');
-              } else {
-                P('  TRACK (' + fmtD(u2u(W.width)) + ',(' + fmtD(cc(u2u(W.x1))) + ',' + fmtD(cc(u2u(W.y1))) + '),(' +
-                  fmtD(cc(u2u(W.x2))) + ',' + fmtD(cc(u2u(W.y2))) + '))\n');
-              }
-            });
-            // S.polyPours(P) / P.contours(W): drawn polygon outline as closed loop
-            S.polygons.forEach(function (Pg) {
-              if (lay !== Pg.layer) return;
-              polygonContours++;
-              const v = Pg.vertices;
-              for (let k = 0; k < v.length; k++) {
-                const a = v[k], b = v[(k + 1) % v.length];
-                if (v.length < 2) break;
-                P('  TRACK (' + fmtD(u2u(Pg.width)) + ',(' + fmtD(cc(u2u(a.x))) + ',' + fmtD(cc(u2u(a.y))) + '),(' +
-                  fmtD(cc(u2u(b.x))) + ',' + fmtD(cc(u2u(b.y))) + '))\n');
-              }
-            });
-            P('  ));\n');
-          }
-        }
-      });
-
-      // name texts
-      B.elements.forEach(function (E) {
-        const textlayer = E.mirror ? 26 : 25;
-        const mir = E.mirror ? 'M' : '';
-        P('0,LAYER (' + fmtD(fablayer(textlayer)) + ' (\n');
-        P('  TEXT (1,' + fmtD(cc(u2u(E.x))) + ',' + fmtD(cc(u2u(E.y))) + ',CENTER,0,' + mir + ',' + E.name + ')));\n');
-      });
-      B.plainTexts.forEach(function (T) {
-        if (T.layer === 1 || T.layer === 16 || T.layer === 21) textBlock(T);
-      });
-      P(':EOD\n');
-    }
-
-    // ---- nets ------------------------------------------------------------
-    function nets() {
-      let i = 0;
-      P('\n:NETS\n');
-      B.signals.forEach(function (S) {
-        if (!realnet(S)) return;
-        P(fmtD(++i) + ',"' + S.name + '",S,\n   (');
-        let itemcnt = 0;
-        S.contactrefs.forEach(function (C) {
-          const el = B.elements.find(function (e) { return e.name === C.element; });
-          const contact = el ? elementContacts(el).find(function (c) { return c.name === C.pad; }) : null;
-          if (contact) {
-            const elnr = getelnr(C.element);
-            const pin = fmtD(getpinr(C.element, C.pad));
-            if (itemcnt) P(',');
-            if (itemcnt > 5) { P('\n   '); itemcnt = 0; }
-            itemcnt++;
-            P('(' + fmtD(elnr) + ',' + pin + ')');
-          } else {
-            // ULP: dlgMessageBox("Found signal '...' without contactref! ..."); exit(-1);
-            warnings.push("Found signal '" + S.name + "' without contactref! (element '" + C.element + "' pad '" + C.pad +
-              "' not resolvable) Check consistence and corrupted signals.");
-          }
-        });
-        P(');\n');
-      });
-      P(':EOD\n');
-    }
-
-    // ---- create_pcboard_section ---------------------------------------------
-    create_header();
-    creat_pad_number_index();
-    B.elements.forEach(get_roundness);
-    board_data();
-    parts();
-    nets();
-    pad_symbols();
-    layer_names();
-    pad_stacks();
-    pads();
-    fonts();
-    packages();
-    layer();
-
-    // ---- warnings --------------------------------------------------------
-    B.elements.forEach(function (E) {
-      if (!E.pkg) warnings.push("Element '" + E.name + "': package '" + E.packageName + "' of library '" + E.library + "' not found in <libraries>.");
-    });
-    if (negCount) warnings.push(negCount + ' negative board coordinate value(s) written; the ULP requires all coordinates to be positive (move the board so it lies in the first quadrant).');
-    if (skippedTextStrokes) warnings.push(skippedTextStrokes + ' text(s) on copper/place/docu layers omitted: the ULP writes them as vector-font TRACK strokes (T.wires()) which cannot be reconstructed from the XML, so no LAYER block is written for them.');
-    if (polygonContours) warnings.push(polygonContours + ' signal polygon(s) written as the drawn outline; the ULP would write the calculated pour contours (P.contours()).');
-
-    return { text: out.join(''), warnings: warnings };
-  }
-
-  buildFATF.parseBoard = parseBoard;
-  buildFATF.buildFATF = buildFATF;
-  if (typeof module !== 'undefined' && module.exports) module.exports = buildFATF;
-  else root.buildFATF = buildFATF;
-})(typeof window !== 'undefined' ? window : globalThis);
-
-</script>
 <!-- MODULES:END -->
 <script>/* built-in demo board (videoPlayer_v1.0.brd, gzip + base64) so the page has something to show on first open */
 window.DEMO_BRD_NAME = "videoPlayer_v1.0.brd";
@@ -2118,7 +1067,7 @@ window.DEMO_BRD_GZ = "H4sIAHfhmWoC/+y93XYcOZbvd19PkZaXZ/Wc0xHCZ3x0d/UxRX20ukRJh2
 "use strict";
 
 /* ================================================================== constants */
-const TOOL_VERSION = "1.1.1";
+const TOOL_VERSION = "1.2.0";
 const DEG = Math.PI/180;
 const MIRROR = {1:16,16:1,21:22,22:21,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31,
                 33:34,34:33,35:36,36:35,37:38,38:37,39:40,40:39,41:42,42:41,51:52,52:51};
@@ -3891,7 +2840,7 @@ const DEFAULT_ASM_NOTES = ASM_NOTES_V100 + "\n" +
   "Assembled boards are finished product. Boards shall be fully depanelized; all mouse-bite and breakaway tab remnants shall be sanded flush with the board edge. All board edges shall be smooth, with no burrs or sharp edges.";
 const PREVIOUS_ASM_DEFAULTS = [OLD_ASM_NOTES, ASM_NOTES_V100, ASM_NOTES_V101];
 const DEFAULTS = {
-  fabSize:"LETTER", asmSize:"LETTER", zones:true, dpi:300, textScale:1, bottomFlip:"auto",
+  fabSize:"LETTER", asmSize:"LETTER", zones:true, textScale:1, bottomFlip:"auto",
   tb:{company:"", dept:"ENGR", createdBy:"", approvedBy:"", techRef:"", docStatus:"", productTitle:"", boardName:"", partNumber:"", pcbPartNumber:"", rev:"1.0", date:"", dwgFab:"", dwgAsm:""},
   spec:{material:"FR-4", tg:"TG 150-160", thickness:"1.6mm", trackSpace:"6/6mil", minHole:"0.3mm", mask:"Green", silk:"White", edgeConn:"No", bevel:"No",
         finish:"HASL lead free", auThk:'1U"', enepig:'Ni:200U" Pd:2U" Au:2U"', via:"Tenting vias", holeCu:"Standard (20um)", cuOuter:"1 oz Cu", cuInner:"1 oz",
@@ -3909,7 +2858,7 @@ function save(){ try{ localStorage.setItem(STORE, JSON.stringify(cfg)); }catch(e
 const getP = (o,path)=>path.split(".").reduce((a,k)=>a==null?a:a[k], o);
 const setP = (o,path,v)=>{ const ks=path.split("."); let t=o; ks.slice(0,-1).forEach(k=>{ t=t[k]; }); t[ks[ks.length-1]]=v; };
 
-let model=null, docs={fab:[],asm:[]}, cur={doc:"fab", idx:0}, vendorImg=null, pan=null, rawXml=null;
+let model=null, docs={fab:[],asm:[]}, cur={doc:"fab", idx:0}, vendorImg=null, pan=null;
 const wrap = $("canvaswrap");
 
 /* ---------- field bindings ---------- */
@@ -3920,7 +2869,7 @@ const TEXT_FIELDS = [
   ["s-material","spec.material"],["s-tg","spec.tg"],["s-thickness","spec.thickness"],["s-trackSpace","spec.trackSpace"],["s-minHole","spec.minHole"],["s-mask","spec.mask"],["s-silk","spec.silk"],
   ["s-edgeConn","spec.edgeConn"],["s-bevel","spec.bevel"],["s-finish","spec.finish"],["s-auThk","spec.auThk"],["s-enepig","spec.enepig"],["s-via","spec.via"],["s-holeCu","spec.holeCu"],["s-cuOuter","spec.cuOuter"],["s-cuInner","spec.cuInner"],
   ["s-removePN","spec.removePN"],["s-peelable","spec.peelable"],["s-ul","spec.ul"],["s-dateCode","spec.dateCode"],["s-engineer","spec.engineer"],["s-special","spec.specialText"],
-  ["s-stackSource","stack.source"],["f-notes","fab.notes"],["a-notes","asm.notes"],["s-dpi","dpi"]
+  ["s-stackSource","stack.source"],["f-notes","fab.notes"],["a-notes","asm.notes"]
 ];
 const CHECK_FIELDS = [
   ["s-zones","zones"],["f-silk","fab.silk"],["f-pads","fab.pads"],["f-vias","fab.vias"],["f-traces","fab.traces"],["f-dims","fab.dims"],["f-holeCallouts","fab.holeCallouts"],["f-smallHoles","fab.smallHoles"],["f-millCallouts","fab.millCallouts"],
@@ -3988,7 +2937,6 @@ function onChange(path){
   save();
   if(path==="stack.source" || path==="spec.thickness" || path==="spec.cuOuter" || path==="spec.cuInner") renderStackEditor();
   if(path && path.indexOf("spec.")===0) renderAutoNotes();
-  if(path==="fabSize"||path==="asmSize") $("printsize").textContent = SHEETS[cur.doc==="fab"?cfg.fabSize:cfg.asmSize].label;
   if(!model) return;
   cancelAnimationFrame(raf); raf = requestAnimationFrame(()=>{ rebuild(); showSheet(); });
 }
@@ -4316,7 +3264,6 @@ function showSheet(){
   $("pg-label").textContent = `${cur.idx+1} / ${list.length}`;
   $("pg-prev").disabled = cur.idx===0; $("pg-next").disabled = cur.idx>=list.length-1;
   $("sheetname").textContent = `${sheet.name} — ${cur.doc==="fab"?SHEETS[cfg.fabSize].label:SHEETS[cfg.asmSize].label} ${sheet.w} × ${sheet.h} mm`;
-  $("printsize").textContent = cur.doc==="fab" ? SHEETS[cfg.fabSize].label : SHEETS[cfg.asmSize].label;
 }
 $("docseg").addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b) return; cur.doc=b.dataset.doc; cur.idx=0;
   $("docseg").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", String(x===b))); if(model) showSheet(); });
@@ -4364,7 +3311,7 @@ function autoSpecFromBoard(){
 /* ---------- loading ---------- */
 function loadText(text, fileName){
   try{
-    model = parseBoard(text, fileName); rawXml = text;
+    model = parseBoard(text, fileName);
     $("filechip").innerHTML = `<div class="filechip"><span class="nm">${esc(fileName)}</span><button class="link" id="clearfile">clear</button></div>`;
     $("clearfile").addEventListener("click", ()=>location.reload());
     $("dropzone").style.display="none";
@@ -4402,7 +3349,7 @@ function loadText(text, fileName){
     save();
     renderStackEditor(); renderAutoNotes(); renderStats(); runChecks();
     cur.idx=0; rebuild(); showSheet();
-    $("exportnote").textContent = `${docs.fab.length} fab sheet, ${docs.asm.length} assembly sheet${docs.asm.length>1?"s":""} (${docs.asm.filter(s=>/Parts/.test(s.name)).length} parts list).`;
+    $("exportnote").textContent = `PDF will have ${docs.fab.length+docs.asm.length} pages: ${docs.fab.length} fab, ${docs.asm.length} assembly${docs.asm.some(s=>/Parts/.test(s.name))?" (incl. parts list)":""}.`;
   }catch(err){
     wrap.innerHTML = `<div class="empty"><h3>Couldn't read that file</h3><p>${esc(err.message)}</p></div>`;
     console.error(err);
@@ -4419,59 +3366,9 @@ document.addEventListener("drop", e=>{ e.preventDefault(); const f=e.dataTransfe
 
 /* ---------- export ---------- */
 function download(name, blob){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500); }
-const fileBase = doc => `${(cfg.tb.partNumber||model.name).replace(/[^\w.-]+/g,"_")}_${doc==="fab"?"FAB_DRAWING":"ASSEMBLY_DRAWING"}`;
-$("btn-svg").addEventListener("click", ()=>{ if(!model) return; const s=docs[cur.doc][cur.idx];
-  download(`${fileBase(cur.doc)}_sheet${cur.idx+1}.svg`, new Blob([s.svg],{type:"image/svg+xml"})); });
-$("btn-png").addEventListener("click", ()=>{ if(!model) return; const s=docs[cur.doc][cur.idx], dpi=+cfg.dpi||300;
-  const W=Math.min(16000, Math.round(s.w/25.4*dpi)), H=Math.min(16000, Math.round(s.h/25.4*dpi));
-  const img=new Image();
-  img.onload=()=>{ const cv=document.createElement("canvas"); cv.width=W; cv.height=H; const g=cv.getContext("2d"); g.fillStyle="#fff"; g.fillRect(0,0,W,H); g.drawImage(img,0,0,W,H);
-    cv.toBlob(b=>{ if(!b){ $("exportnote").innerHTML=`<span class="warn">The browser refused a ${W}×${H} px canvas. Lower the dpi.</span>`; return; } download(`${fileBase(cur.doc)}_sheet${cur.idx+1}_${dpi}dpi.png`, b); }); };
-  img.onerror=()=>{ $("exportnote").innerHTML=`<span class="warn">Could not rasterise the sheet; export SVG instead.</span>`; };
-  img.src = "data:image/svg+xml;base64,"+btoa(unescape(encodeURIComponent(s.svg))); });
-const csv = rows => rows.map(r=>r.map(v=>{ v=String(v==null?"":v); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }).join(",")).join("\r\n");
-$("btn-bom").addEventListener("click", ()=>{ if(!model) return; const bom=buildBom();
-  const rows=[["Item","Qty","Reference designators","Value","Package","Manufacturer","Manufacturer P/N","Description","Supplier","Supplier P/N","DNP"]];
-  bom.forEach((b,i)=>rows.push([i+1, b.dnp?0:b.qty, b.refs.join(" "), b.value, b.pkg, b.mfr, b.mpn, b.desc, b.sup, b.supPn, b.dnp?"DNP":""]));
-  download(`${fileBase("asm").replace("ASSEMBLY_DRAWING","BOM")}.csv`, new Blob([csv(rows)],{type:"text/csv"})); });
-$("btn-xy").addEventListener("click", ()=>{ if(!model) return;
-  const rows=[["RefDes","Value","Package","X (mm)","Y (mm)","Rotation","Side","DNP"]];
-  model.parts.forEach(p=>rows.push([p.ref,p.value,p.pkg,p.x.toFixed(4),p.y.toFixed(4),p.ang,p.side==="top"?"Top":"Bottom",p.dnp?"DNP":""]));
-  download(`${fileBase("asm").replace("ASSEMBLY_DRAWING","CENTROID")}.csv`, new Blob([csv(rows)],{type:"text/csv"})); });
-$("btn-drillcsv").addEventListener("click", ()=>{ if(!model) return;
-  const nCu = model.copperLayers.length;
-  const rows=[["N°","Mils","MM","Qty","Plated","Layers","Types"]];
-  model.drillGroups.forEach(g=>rows.push([g.n, Math.round(g.dia/0.0254), fmtMM3(g.dia), g.qty, g.platedText, g.through?`L1-L${nCu} thru`:`L${g.startPhys}-L${g.endPhys}`, [...g.types].join("+")]));
-  download(`${fileBase("fab").replace("FAB_DRAWING","DRILL_TABLE")}.csv`, new Blob([csv(rows)],{type:"text/csv"})); });
-
-$("btn-fatf").addEventListener("click", ()=>{
-  if(!model || !rawXml) return;
-  if(typeof buildFATF!=="function"){ $("exportnote").innerHTML=`<span class="warn">Fabmaster export module is missing from this build.</span>`; return; }
-  try{
-    const d = new Date(), z = n => String(n).padStart(2,"0");
-    const dateString = `${z(d.getDate())}.${z(d.getMonth()+1)}.${d.getFullYear()} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
-    const r = buildFATF(rawXml, {jobname: model.name, dateString});
-    download(`${model.name}.fab`, new Blob([r.text],{type:"text/plain"}));
-    $("exportnote").innerHTML = `Fabmaster FATF written (${r.text.split("\n").length} lines)` + (r.warnings&&r.warnings.length ? `<br><span class="warn">${esc(r.warnings.slice(0,4).join(" · "))}${r.warnings.length>4?" …":""}</span>` : "");
-  }catch(err){ $("exportnote").innerHTML=`<span class="warn">Fabmaster export failed: ${esc(err.message)}</span>`; console.error(err); }
-});
-function printSheets(list){
-  if(!list.length) return;
-  const sizes = [...new Set(list.map(s=>`${s.w}mm ${s.h}mm`))];
-  let css = "";
-  if(sizes.length===1) css = `@page{size:${sizes[0]};margin:0}`;
-  else { sizes.forEach((sz,i)=>{ css += `@page p${i}{size:${sz};margin:0} .page.p${i}{page:p${i}} `; }); }
-  $("printstyle").innerHTML = `<style>${css}</style>`;
-  $("printroot").innerHTML = list.map(s=>{ const cls = sizes.length>1 ? "p"+sizes.indexOf(`${s.w}mm ${s.h}mm`) : "";
-    return `<div class="page ${cls}" style="width:${s.w}mm;height:${(s.h-0.3).toFixed(2)}mm">${s.svg}</div>`; }).join("");
-  const done=()=>{ $("printroot").innerHTML=""; window.removeEventListener("afterprint",done); };
-  window.addEventListener("afterprint", done);
-  setTimeout(()=>window.print(), 50);
-}
-$("btn-print").addEventListener("click", ()=>{ if(model) printSheets(docs[cur.doc]); });
-$("btn-printall").addEventListener("click", ()=>{ if(model) exportPdf(docs.fab.concat(docs.asm), `${(cfg.tb.partNumber||model.name).replace(/[^\w.-]+/g,"_")}_DRAWINGS.pdf`); });
-$("btn-pdf").addEventListener("click", ()=>{ if(model) exportPdf(docs[cur.doc], fileBase(cur.doc)+".pdf"); });
-$("btn-pdfall").addEventListener("click", ()=>{ if(model) exportPdf(docs.fab.concat(docs.asm), `${(cfg.tb.partNumber||model.name).replace(/[^\w.-]+/g,"_")}_DRAWINGS.pdf`); });
+const fileBase = () => `${(cfg.tb.partNumber||model.name).replace(/[^\w.-]+/g,"_")}_DRAWINGS`;
+$("btn-printall").addEventListener("click", ()=>{ if(model) exportPdf(docs.fab.concat(docs.asm), fileBase()+".pdf"); });
+$("btn-pdf").addEventListener("click", ()=>{ if(model) exportPdf(docs.fab.concat(docs.asm), fileBase()+".pdf"); });
 async function exportPdf(sheets, name){
   try{ $("exportnote").textContent = "Writing PDF…"; const blob = await buildPdf(sheets); download(name, blob);
        $("exportnote").textContent = `${name}: ${sheets.length} page${sheets.length>1?"s":""}, ${(blob.size/1024).toFixed(0)} KB, vector.`; }
@@ -4494,7 +3391,6 @@ document.addEventListener("keydown", e=>{ if(e.target.matches("input,textarea,se
 /* ---------- init ---------- */
 bindAll(); syncForm(); renderStackEditor(); renderAutoNotes();
 $("toolver").textContent = "v"+TOOL_VERSION; document.title = `PCB Drawing Generator v${TOOL_VERSION}`;
-$("printsize").textContent = SHEETS[cfg.fabSize].label;
 window.__pcbdg = { loadText, cfg, model:()=>model, docs:()=>docs, derive:()=>derive() };
 /* built-in demo board on first open */
 let demoPending = false;
