@@ -8,3 +8,8 @@ drawingMaker_Test.html
 node_modules/
 *.fab
 *.fatf
+# private boards stay local; only the demo board is tracked
+*.brd
+!videoPlayer_v1.0.brd
+# project files embed the whole board
+*.pcbdg

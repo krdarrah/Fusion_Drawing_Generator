@@ -1,7 +1,26 @@
 <!doctype html>
 <!--
   PCB Drawing Generator — single-file fab / assembly drawing generator for EAGLE / Fusion 360 .brd files
-  Version 1.3.3 (2026-09-04)
+  Version 1.4.0 (2026-09-04)
+  1.4.0  Hand assembly mode (third button next to Fab / Assembly drawing): a large board view with one list row per
+         value + package per side. Click a row (or a part) to light up every part of that group, search by value,
+         package, designator or part number, tick groups as placed (remembered per board), step with the keyboard
+         (arrows, Space, Enter, Z to zoom to the selection, / to search), pin-1 / cathode marks on highlighted parts.
+         Project file (.pcbdg): the board (compressed), all settings, logo, notes and hand-assembly progress in one file
+         that anyone can drop on the page; "Load settings / project" and the file drop accept it; #project=<url> deep link.
+         Assembly layout "Views per sheet": Auto gives each side its own sheet (full height beside the title block,
+         notes on their own sheet) as soon as the designators would get crowded side by side; grouped callouts
+         ("2× SLOT …", "4× Ø…") now draw a leader to every feature in the group; plain holes from 1.5 mm get callouts.
+         Designators are sized per part to sit on their own footprint (turned 90° on tall parts) down to a "Smallest
+         designator" size; every label then goes through the collision engine (crowded views: on-part first, roomy
+         views: full size beside the part first, then on-part), so labels never overlap each other; a thin halo
+         replaces the solid backing so pads stay visible; only parts with no room at all get a leader.
+         Designators are grabbed anywhere on their box (solid hit area under the halo text), keep their size and
+         orientation when dropped, double-click turns one 90° back and forth, Alt+double-click snaps it back.
+         Hand assembly fixes from review: real mouse clicks on a part select its row (pointer capture only once a
+         drag starts, also on the sheets), keyboard stepping keeps working after ticking a checkbox, a designator
+         search matches that designator only, POPULATE=yes is no longer read as DNP, arrow keys and note mode are
+         inert on the build screen, THT pad shapes and far-side pads in the highlight, narrow-window tool strip.
   1.3.3  Fabmaster .fab (FATF REV 11.1) export is back in the Export panel: a JavaScript port of the fabmasterF360.ulp
          (V1.46) that writes the same file from the loaded .brd, with warnings for anything the XML cannot supply.
          Company defaults to KD CIRCUITS and a new Contact line in the title block (under the logo or company name)
@@ -181,6 +200,55 @@ button.btn.sm{padding:4px 7px}
 .empty h3{font-size:16px;color:var(--ink)}
 .empty p{max-width:46ch;font-size:12.5px;margin:0}
 .tip{position:absolute;left:12px;bottom:10px;font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--muted);letter-spacing:.03em;z-index:3}
+/* hand assembly (build) mode */
+.build{position:absolute;inset:0;display:grid;grid-template-columns:1fr minmax(300px,360px);min-height:0}
+.build-board{position:relative;overflow:hidden;background:var(--bg)}
+.build-board svg{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+.build-board svg.drag{cursor:grabbing}
+.build-board .part{pointer-events:all;cursor:pointer}
+.build-board .part .box{fill:transparent;stroke:none}
+.build-board .part .pads{fill:transparent}
+.build-board .part .lbl,.build-board .part .mk,.build-board .part .mkt{display:none;pointer-events:none}
+.build-board .fade{opacity:0;pointer-events:none;transition:opacity .15s}
+.build-board svg.sel .fade{opacity:.72}
+.build-board .part.done .box{fill:rgba(82,224,154,.22)}
+.build-board .part.hover .box{stroke:var(--accent);stroke-width:.12;fill:rgba(82,224,154,.15)}
+.build-board .part.hl .pads{fill:#ff7a1a;stroke:#fff;stroke-width:.06}
+.build-board .part.hl .box{fill:rgba(255,122,26,.16);stroke:#ff7a1a;stroke-width:.14}
+.build-board .part.hl.dnp .pads{fill:#9a9a9a}
+.build-board .part.hl.dnp .box{stroke:#9a9a9a;stroke-dasharray:.3 .2}
+.build-board .part.hl .lbl{display:block;fill:#111;stroke:#fff;stroke-width:.16;paint-order:stroke;font-family:Arial,Helvetica,sans-serif;font-weight:bold}
+.build-board .part.hl .mk{display:block;fill:#fff;stroke:#111;stroke-width:.05}
+.build-board .part.hl .mkt{display:block;fill:#111;font-family:Arial,Helvetica,sans-serif;font-weight:bold}
+.build-board svg.nolabels [data-g="refdes"]{display:none}
+.build-tools{position:absolute;left:12px;top:12px;display:flex;flex-wrap:wrap;max-width:calc(100% - 24px);gap:6px;z-index:3;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:4px 6px;box-shadow:var(--shadow)}
+.build-tools .seg button{padding:4px 10px}
+.build-tools label.row{font-size:11px;color:var(--ink-2);margin-left:4px}
+.build-tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--r);padding:5px 8px;font:11.5px "IBM Plex Mono",ui-monospace,monospace;color:var(--ink);z-index:4;box-shadow:var(--shadow);white-space:nowrap}
+.build-tip b{color:var(--accent)}
+.build-panel{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.build-head{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.build-head .row2{display:flex;gap:6px;align-items:center}
+.build-progress{font:11px "IBM Plex Mono",ui-monospace,monospace;color:var(--muted);letter-spacing:.04em}
+.build-bar{height:4px;background:var(--panel-2);border-radius:2px;overflow:hidden}
+.build-bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.build-list{flex:1;overflow:auto;min-height:0}
+.brow{display:grid;grid-template-columns:auto 1fr;gap:9px;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;align-items:start}
+.brow:hover{background:var(--panel-2)}
+.brow.sel{background:rgba(255,122,26,.12);box-shadow:inset 3px 0 0 #ff7a1a}
+.brow.done .bval b,.brow.done .brefs{opacity:.45;text-decoration:line-through}
+.brow.dnp .bval b{color:var(--muted)}
+.brow input{margin:3px 0 0;accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+.bval{font-size:13px;color:var(--ink);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.bval b{font-weight:600}
+.bpkg{font:11px "IBM Plex Mono",ui-monospace,monospace;color:var(--muted)}
+.bqty{font:11px "IBM Plex Mono",ui-monospace,monospace;color:var(--accent)}
+.btag{font:9.5px "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--line-soft);border-radius:3px;padding:1px 5px;color:var(--muted)}
+.btag.warn{color:var(--flag);border-color:var(--flag)}
+.brefs{font:11px ui-monospace,Menlo,monospace;color:var(--ink-2);line-height:1.5;word-break:break-word}
+.bmpn{font-size:11px;color:var(--muted)}
+.build-empty{padding:20px;color:var(--muted);font-size:12px}
+.buildmode .pager,.buildmode #sheetname,.buildmode #btn-note,.buildmode #notehint,.buildmode #btn-note2,.buildmode #notehint2{display:none}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -208,7 +276,7 @@ button.btn.sm{padding:4px 7px}
       </div>
       <div class="help">From <b>Fusion 360 Electronics</b>: open the PCB design, then <b>File &rarr; Export &rarr; EAGLE 9.x</b> and save the board as a <b>.brd</b>. EAGLE 6&ndash;9 .brd files work too.</div>
       <div class="btnrow"><button class="btn" id="btn-demo">Load the demo board</button></div>
-      <input type="file" id="fileinput" accept=".brd,.xml" hidden>
+      <input type="file" id="fileinput" accept=".brd,.xml,.pcbdg,.json" hidden>
       <div id="filechip"></div>
     </div>
 
@@ -410,7 +478,9 @@ button.btn.sm{padding:4px 7px}
       <summary>Assembly drawing</summary>
       <div class="inner">
         <label class="row"><input type="checkbox" id="a-silkRow" checked> Silkscreen views row</label>
-        <label class="row"><input type="checkbox" id="a-onePerSheet"> One view per sheet (large boards)</label>
+        <label class="field">Views per sheet
+          <select id="a-layout"><option value="auto">Auto: own sheet per side when the designators get crowded</option><option value="row">Side by side</option><option value="one">One view per sheet</option></select>
+        </label>
         <label class="row"><input type="checkbox" id="a-docu"> Body outlines from tDocu / bDocu</label>
         <label class="row"><input type="checkbox" id="a-pin1" checked> Orientation marks: pin 1, cathode (K), polarity (+)</label>
         <label class="row"><input type="checkbox" id="a-spread" checked> Move colliding reference designators</label>
@@ -419,6 +489,9 @@ button.btn.sm{padding:4px 7px}
         <label class="row"><input type="checkbox" id="a-bomHardware"> Show pads, test points, fiducials (labels on views and parts list)</label>
         <label class="row"><input type="checkbox" id="a-silkViews" checked> Silkscreen under assembly views</label>
         <div class="slider"><span>Designator size</span><input type="range" id="a-refSize" min="10" max="40" value="20"><b id="a-refSizeV">2.0 mm</b></div>
+        <label class="row"><input type="checkbox" id="a-fitInside" checked> Fit designators inside their parts (shrink, turn 90° when needed)</label>
+        <div class="slider"><span>Smallest designator</span><input type="range" id="a-refMin" min="5" max="20" value="8"><b id="a-refMinV">0.8 mm</b></div>
+        <div class="help">Each designator is sized to sit on its own part, down to this size; parts too small for that get a leader instead.</div>
         <label class="field">Notes (one per line)
           <textarea id="a-notes" rows="8"></textarea>
         </label>
@@ -447,10 +520,12 @@ button.btn.sm{padding:4px 7px}
         </div>
         <div class="help">One PDF with the fab drawing followed by the assembly drawing, written by this page as vector pages at the exact sheet size (Letter = 11 × 8.5 in). No print dialog, margins or scaling involved.</div>
         <div class="btnrow">
+          <button class="btn" id="btn-saveProject" title="Board + settings + notes + hand-assembly progress in one file">Save project .pcbdg</button>
           <button class="btn" id="btn-saveSettings">Save settings .json</button>
-          <button class="btn" id="btn-loadSettings">Load settings</button>
-          <input type="file" id="settingsinput" accept=".json,application/json" hidden>
+          <button class="btn" id="btn-loadSettings">Load settings / project</button>
+          <input type="file" id="settingsinput" accept=".json,.pcbdg,application/json" hidden>
         </div>
+        <div class="help">A <b>.pcbdg</b> project file carries the board itself (compressed), every setting, the logo, the notes and the hand-assembly progress, so someone else can drop that one file here and see exactly what you see.</div>
         <div class="help" id="settingsnote">Everything (title block, spec, notes, logo, vendor image, hand-placed labels and added notes) is remembered per board name in this browser and can be saved to a .json. To rev a board: load the new .brd, then load the old .json (or the other way round); the notes come along.</div>
         <div class="btnrow">
           <button class="btn" id="btn-fatf" title="Same output as the fabmasterF360.ulp Fabmaster FATF export">Fabmaster .fab</button>
@@ -471,6 +546,7 @@ button.btn.sm{padding:4px 7px}
       <div class="seg" id="docseg">
         <button data-doc="fab" aria-pressed="true">Fab drawing</button>
         <button data-doc="asm" aria-pressed="false">Assembly drawing</button>
+        <button data-doc="build" aria-pressed="false" title="Find parts while hand-assembling: one row per value and package, click to light them up">Hand assembly</button>
       </div>
       <div class="pager">
         <button id="pg-prev" title="Previous sheet">&lsaquo;</button>
@@ -2145,7 +2221,7 @@ window.DEMO_BRD_GZ = "H4sIAHfhmWoC/+y93XYcOZbvd19PkZaXZ/Wc0xHCZ3x0d/UxRX20ukRJh2
 "use strict";
 
 /* ================================================================== constants */
-const TOOL_VERSION = "1.3.3";
+const TOOL_VERSION = "1.4.0";
 const DEG = Math.PI/180;
 const MIRROR = {1:16,16:1,21:22,22:21,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31,
                 33:34,34:33,35:36,36:35,37:38,38:37,39:40,40:39,41:42,42:41,51:52,52:51};
@@ -2364,7 +2440,7 @@ function parseBoard(xmlText, fileName){
     let dnp = false;
     const val = el.getAttribute("value")||"";
     if(/^(DNP|DNI|NO\s*POP|NOPOP|NC|DO NOT (POPULATE|PLACE|INSTALL))$/i.test(val.trim())) dnp = true;
-    if(/^(no|false|0)$/i.test(attrs.POPULATE||attrs.POPULATED||attrs.DNP==="yes"?"no":"")) dnp = true;
+    if(/^(no|false|0)$/i.test(String(attrs.POPULATE ?? attrs.POPULATED ?? ""))) dnp = true;
     if(/^(yes|true|1)$/i.test(attrs.DNP||"")) dnp = true;
     el.querySelectorAll(":scope > variant").forEach(v=>{ if(v.getAttribute("populate")==="no") dnp = true; });
     const rec = { ref:name, value:val, pkg:pkgName, lib:el.getAttribute("library")||"", side, x:ex, y:ey, rotS:el.getAttribute("rot")||"R0",
@@ -2511,8 +2587,8 @@ function parseBoard(xmlText, fileName){
   /* identical features get one callout with a count, on the instance nearest the board edge */
   const groups = new Map();
   const edgeD = m => Math.min(m.cx-bb.x1, bb.x2-m.cx, m.cy-bb.y1, bb.y2-m.cy);
-  milled.forEach(m=>{ const g=groups.get(m.text); if(!g) groups.set(m.text,{rep:m,n:1}); else { g.n++; if(edgeD(m)<edgeD(g.rep)) g.rep=m; } });
-  const milledGroups = [...groups.values()].map(g=>Object.assign({}, g.rep, {n:g.n, label:(g.n>1?g.n+"× ":"")+g.rep.text}));
+  milled.forEach(m=>{ const g=groups.get(m.text); if(!g) groups.set(m.text,{rep:m,n:1,members:[m]}); else { g.n++; g.members.push(m); if(edgeD(m)<edgeD(g.rep)) g.rep=m; } });
+  const milledGroups = [...groups.values()].map(g=>Object.assign({}, g.rep, {n:g.n, label:(g.n>1?g.n+"× ":"")+g.rep.text, members:g.members.map(m=>({cx:m.cx, cy:m.cy, w:m.w, h:m.h}))}));
 
   /* part extents (pads + docu/place outlines) for labels */
   parts.forEach(pt=>{
@@ -2624,9 +2700,16 @@ function parseBoard(xmlText, fileName){
   });
 
   const minDrillUsed = drills.length ? Math.min.apply(null, drills.map(d=>d.dia)) : null;
+  /* board plus parts that hang over the edge (USB, antenna and edge connectors): assembly and silkscreen views
+     are scaled and centred on this box so overhanging bodies neither clip nor run into the caption. Artwork
+     further than 15 mm outside the board is treated as decoration and ignored. */
+  const bbAsm = {x1:bb.x1, y1:bb.y1, x2:bb.x2, y2:bb.y2};
+  parts.forEach(pt=>{ if(pt.hardware || !pt.ext) return; const e=pt.ext;
+    bbAsm.x1 = Math.min(bbAsm.x1, Math.max(e.x1, bb.x1-15)); bbAsm.y1 = Math.min(bbAsm.y1, Math.max(e.y1, bb.y1-15));
+    bbAsm.x2 = Math.max(bbAsm.x2, Math.min(e.x2, bb.x2+15)); bbAsm.y2 = Math.max(bbAsm.y2, Math.min(e.y2, bb.y2+15)); });
   return { name:(fileName||"board").replace(/\.[^.]+$/,""), fileName, shapes, parts, traces, vias, outline, outlineCircles, milling,
-           bb, loops, closed, hasOutline, milled, milledGroups, millLoops, cutoutLoops: closed.slice(1), drills, drillGroups, physOf, brdStack, copperLayers, copperUse, rules, layerNames,
-           viaInPad, minDrillUsed, w:bb.x2-bb.x1, h:bb.y2-bb.y1 };
+           bb, bbAsm, loops, closed, hasOutline, milled, milledGroups, millLoops, cutoutLoops: closed.slice(1), drills, drillGroups, physOf, brdStack, copperLayers, copperUse, rules, layerNames,
+           viaInPad, minDrillUsed, w:bb.x2-bb.x1, h:bb.y2-bb.y1, wAsm:bbAsm.x2-bbAsm.x1, hAsm:bbAsm.y2-bbAsm.y1 };
 }
 
 /* classic drill-legend symbols: the first four match drill_legend_board.ulp, the rest keep sizes distinct */
@@ -2906,18 +2989,33 @@ function renderBoardView(model, o){
     const labelArea = parts.reduce((a,pt)=> a + ((opts.values&&pt.value?pt.value:pt.ref).length*0.62+0.35)*fsPaper*fsPaper*1.05, 0);
     const boardArea = model.w*model.h*s*s;
     if(boardArea>0 && labelArea > 0.30*boardArea) fsPaper = Math.max(1.3, fsPaper*Math.sqrt(0.30*boardArea/labelArea));
+    const dense = boardArea>0 && labelArea > 0.12*boardArea;   /* crowded view: labels go on their parts first; roomy view: full-size labels beside them first */
     const fs = fsPaper/s;                          /* board mm */
+    const fsMaxV = (opts.refSize||2.0)/s, fsMinV = Math.min(fsMaxV, (opts.refMin||0.8)/s), fitOn = opts.fitInside!==false;
     const out = new Map();
     const labelOf = pt => ((opts.values && pt.value) ? pt.value : pt.ref) + (pt.dnp?" (DNP)":"");
     const boxOf = pt => { const q1=p(pt.ext.x1,pt.ext.y1), q2=p(pt.ext.x2,pt.ext.y2);
       return {x1:Math.min(q1[0],q2[0]), y1:Math.min(q1[1],q2[1]), x2:Math.max(q1[0],q2[0]), y2:Math.max(q1[1],q2[1])}; };
     const keyOf = pt => `ref|${near}|${pt.ref}`;
-    const emit = (pt, lbl, cx, cy, leader) => {
-      const bw = lbl.length*fs*0.6+fs*0.35, bh = fs*1.02, col = pt.dnp ? TH.dnp : pt.hardware ? TH.hardware : INK;
-      const back = `<rect x="${N(cx-bw/2)}" y="${N(cy-bh/2)}" width="${N(bw)}" height="${N(bh)}" rx="${N(fs*0.12)}" fill="${TH.backing}" fill-opacity="0.85"/>`;
+    const emit = (pt, lbl, cx, cy, leader, f, rot, onPart) => {
+      f = f || fs;
+      const tw = lbl.length*f*0.6+f*0.35, th = f*1.02, bw = rot ? th : tw, bh = rot ? tw : th, col = pt.dnp ? TH.dnp : pt.hardware ? TH.hardware : INK;
+      /* designators keep the pads visible: a thin halo in the paper colour instead of a solid backing box */
+      const back = "";
+      const halo = ` stroke="${TH.backing}" stroke-width="${N(f*0.18)}" stroke-linejoin="round" paint-order="stroke"`;
       const c = p(pt.cx, pt.cy);
-      out.set(pt.ref, `<g data-ref="${esc(pt.ref)}"${dragAttrs(keyOf(pt), s, cx, cy, c[0], c[1])}>${leader}${back}<text x="${N(cx)}" y="${N(cy)}" dy="0.35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${N(fs)}" fill="${col}"${pt.dnp?' font-style="italic"':""}>${esc(lbl)}</text></g>`);
+      const hit = `<rect x="${N(cx-bw/2)}" y="${N(cy-bh/2)}" width="${N(bw)}" height="${N(bh)}" fill="transparent" stroke="none" pointer-events="all"/>`;   /* solid grab area for dragging */
+      out.set(pt.ref, `<g data-ref="${esc(pt.ref)}"${dragAttrs(keyOf(pt), s, cx, cy, c[0], c[1])} data-f="${N(f*s)}" data-rot="${rot?90:0}">${leader}${back}${hit}<text x="${N(cx)}" y="${N(cy)}" dy="0.35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${N(f)}" fill="${col}"${halo}${pt.dnp?' font-style="italic"':""}${rot?` transform="rotate(-90 ${N(cx)} ${N(cy)})"`:""}>${esc(lbl)}</text></g>`);
     };
+    /* largest size (up to the designator size) at which the label sits inside its own footprint, upright or turned 90° */
+    const fitInside = (pt, forceRot) => {
+      if(!fitOn) return null;
+      const lbl = labelOf(pt), n = Math.max(1, lbl.length), b = boxOf(pt), bw = (b.x2-b.x1)*0.96, bh = (b.y2-b.y1)*0.96;
+      const fH = Math.min(bw/(n*0.62+0.3), bh/1.05), fR = Math.min(bh/(n*0.62+0.3), bw/1.05);
+      const rot = forceRot!=null ? !!forceRot : fR > fH*1.15, f = Math.min(fsMaxV, rot ? fR : fH);
+      return f >= fsMinV ? {f, rot} : null;
+    };
+    const forcedRot = pt => { const ov = OVERRIDES[keyOf(pt)]; return ov && (ov.rot===90 || ov.rot===0) ? ov.rot===90 : null; };   /* double-click turned it */
     const leaderTo = (pt, c, box) => {            /* leader from the part outline box to the label box, if apart */
       const hb = boxOf(pt);
       const ex = Math.max(box.x1, Math.min(box.x2, c[0])), ey = Math.max(box.y1, Math.min(box.y2, c[1]));
@@ -2939,14 +3037,23 @@ function renderBoardView(model, o){
     }
     if(typeof placeLabels==="function"){
       /* collision-free placement: every part's footprint is a soft obstacle for the other labels */
-      const items=[], obs=[], fixed=new Map();
+      const items=[], obs=[], fixed=new Map(), inside=new Map();
+      parts.forEach(pt=>{ const ov = OVERRIDES[keyOf(pt)]; if(ov && isFinite(ov.dx) && isFinite(ov.dy)) return; const fi = fitInside(pt, forcedRot(pt)); if(fi) inside.set(pt.ref, fi); });
+      /* labels that cannot sit on their part use the typical size of the ones that can, so a leader label matches its neighbours */
+      const sizes = [...inside.values()].map(x=>x.f).sort((a,b)=>a-b);
+      const fsFb = dense && sizes.length ? Math.max(fsMinV, Math.min(fsMaxV, sizes[Math.floor(sizes.length/2)])) : Math.max(fsMinV, Math.min(fsMaxV, fs));   /* roomy view: full size first */
+      const dims = (lbl, f, rot) => { const tw = lbl.length*f*0.62+f*0.3, th = f*1.05; return rot ? {w:th, h:tw} : {w:tw, h:th}; };
+      /* pass 1: every label at its own fitted size and orientation; the engine keeps them centred on their part when
+         that is free and shifts a label to the side when two would touch */
       parts.forEach(pt=>{
-        const lbl = labelOf(pt), c = p(pt.cx,pt.cy), home = boxOf(pt);
-        const w = lbl.length*fs*0.62+fs*0.4, h = fs*1.1, ov = OVERRIDES[keyOf(pt)];
+        const lbl = labelOf(pt), c = p(pt.cx,pt.cy), home = boxOf(pt), ov = OVERRIDES[keyOf(pt)], fr = forcedRot(pt), fi = dense ? inside.get(pt.ref) : null;
+        const f = fi ? fi.f : fsFb, rot = fi ? fi.rot : (fr!=null ? fr : false), d = dims(lbl, f, rot);
         if(ov && isFinite(ov.dx) && isFinite(ov.dy)){
-          const x=c[0]+ov.dx, y=c[1]+ov.dy; fixed.set(pt.ref, {x,y, box:{x1:x-w/2,y1:y-h/2,x2:x+w/2,y2:y+h/2}});
-          obs.push({x1:x-w/2,y1:y-h/2,x2:x+w/2,y2:y+h/2, hard:true});          /* a moved label is a fixed obstacle */
-        } else items.push({id:pt.ref, ax:c[0], ay:c[1], w, h, priority:pt.area, home, allowLeader:!!opts.spread});
+          /* a hand-placed label keeps the size and orientation it had when it was dropped (or the turned one) */
+          const ff = ov.fs>0 ? Math.max(fsMinV, Math.min(fsMaxV, ov.fs/s)) : fsFb, fro = fr!=null ? fr : false, fd = dims(lbl, ff, fro), x=c[0]+ov.dx, y=c[1]+ov.dy;
+          fixed.set(pt.ref, {x,y, f:ff, rot:fro, box:{x1:x-fd.w/2,y1:y-fd.h/2,x2:x+fd.w/2,y2:y+fd.h/2}});
+          obs.push({x1:x-fd.w/2,y1:y-fd.h/2,x2:x+fd.w/2,y2:y+fd.h/2, hard:true});          /* a moved label is a fixed obstacle */
+        } else items.push({id:pt.ref, ax:c[0], ay:c[1], w:d.w, h:d.h, priority:pt.area, home, allowLeader:!!opts.spread, _f:f, _rot:rot});
         obs.push(Object.assign({}, home, {hard:false, weight:1.5, owner:pt.ref}));
       });
       markGlyphs.forEach(g=>{
@@ -2954,13 +3061,28 @@ function renderBoardView(model, o){
         const pad=g.mfs*0.15;
         obs.push({x1:Math.min(g.tx-g.bw/2, g.q[0]-g.padR)-pad, y1:Math.min(g.ty-g.bh/2, g.q[1]-g.padR)-pad,
                   x2:Math.max(g.tx+g.bw/2, g.q[0]+g.padR)+pad, y2:Math.max(g.ty+g.bh/2, g.q[1]+g.padR)+pad, hard:true}); });
-      const placed = placeLabels(items, obs, opts.bounds||null, {gap:0.2, maxRings: opts.spread ? 8 : 0});
+      const placed = placeLabels(items, obs, opts.bounds||null, {gap:0.15, maxRings: opts.spread ? 8 : 0});
+      /* pass 2: labels the engine had to push away with a leader are re-placed upright at the fallback size, with
+         every settled label as a hard obstacle, so a turned label never dangles away from its part */
+      const settled = new Map(), redo = [];
+      items.forEach(it=>{ const pl = placed.get(it.id); if(pl && !pl.leader) settled.set(it.id, Object.assign({}, pl, {f:it._f, rot:it._rot})); else redo.push(it); });
+      const placed2 = new Map(), redoDims = new Map();
+      if(redo.length){
+        /* crowded view: retry upright at the fallback size; roomy view: a label that found no free spot beside its part
+           gets the chance to sit on the part (shrunk, turned if needed) before it is given a leader */
+        const obs2 = obs.concat([...settled.values()].map(pl=>({x1:pl.x1, y1:pl.y1, x2:pl.x2, y2:pl.y2, hard:true})));
+        const items2 = redo.map(it=>{ const fi = !dense ? inside.get(it.id) : null, ptx = parts.find(q=>q.ref===it.id), fr = forcedRot(ptx), f = fi ? fi.f : fsFb, rot = fi ? fi.rot : (fr!=null ? fr : false);
+          const d = dims(labelOf(parts.find(q=>q.ref===it.id)), f, rot); redoDims.set(it.id, {f, rot}); return Object.assign({}, it, {w:d.w, h:d.h}); });
+        placeLabels(items2, obs2, opts.bounds||null, {gap:0.15, maxRings: opts.spread ? 8 : 0}).forEach((pl,id)=>placed2.set(id, pl));
+      }
       parts.forEach(pt=>{
         const c = p(pt.cx,pt.cy), fx = fixed.get(pt.ref);
-        if(fx){ emit(pt, labelOf(pt), fx.x, fx.y, leaderTo(pt, c, fx.box)); return; }
-        const pl = placed.get(pt.ref);
-        if(!pl){ emit(pt, labelOf(pt), c[0], c[1], ""); return; }
-        emit(pt, labelOf(pt), pl.x, pl.y, pl.leader ? leaderTo(pt, c, pl) : "");
+        if(fx){ emit(pt, labelOf(pt), fx.x, fx.y, leaderTo(pt, c, fx.box), fx.f, fx.rot, false); return; }
+        const st = settled.get(pt.ref);
+        if(st){ emit(pt, labelOf(pt), st.x, st.y, "", st.f, st.rot, !!st.inside); return; }
+        const pl = placed2.get(pt.ref), rd = redoDims.get(pt.ref) || {f:fsFb, rot:false};
+        if(!pl){ emit(pt, labelOf(pt), c[0], c[1], "", rd.f, rd.rot, false); return; }
+        emit(pt, labelOf(pt), pl.x, pl.y, pl.leader ? leaderTo(pt, c, pl) : "", rd.f, rd.rot, !!pl.inside);
       });
     } else {
     const placed = [];
@@ -3201,6 +3323,14 @@ function pickScale(bw,bh,aw,ah){
   for(const s of SCALES){ if(bw*s<=aw && bh*s<=ah) return s; }
   return Math.min(aw/bw, ah/bh);
 }
+/* scale for an assembly/silkscreen view: chosen for the board itself (aw × ah is the inner area), stepped down only
+   when the board plus its overhanging parts would not fit the whole cell (margins may absorb the overhang) */
+function viewScale(model, withOverhang, aw, ah, cellW, cellH, k){
+  const s0 = pickScale(model.w, model.h, aw, ah);
+  if(!withOverhang || !model.bbAsm) return s0;
+  const availW = cellW - 2*k, availH = cellH - 12*k - 2*k;
+  return (model.wAsm*s0 <= availW && model.hAsm*s0 <= availH) ? s0 : pickScale(model.wAsm, model.hAsm, availW, availH);
+}
 const scaleLabel = s => s>=1 ? `${(+s.toFixed(2)).toString()}:1` : `1:${(+(1/s).toFixed(2)).toString()}`;
 
 function placeView(model, cell, v){
@@ -3208,15 +3338,17 @@ function placeView(model, cell, v){
   const k=v.k;
   const mL = v.dims ? 17*k : 5*k, mB = v.dims ? 17*k : 5*k, mR = v.callouts ? 18*k : 5*k, mT = v.callouts ? 12*k : 5*k, capH = 12*k;
   const aw = Math.max(1, cell.w - mL - mR), ah = Math.max(1, cell.h - mT - mB - capH);
-  const s = v.forceScale || pickScale(model.w, model.h, aw, ah);
+  /* assembly / silkscreen views are scaled and centred on the board plus its overhanging parts */
+  const ext = ((v.mode==="asm"||v.mode==="silk") && model.bbAsm) ? model.bbAsm : model.bb;
+  const s = v.forceScale || viewScale(model, ext!==model.bb, aw, ah, cell.w, cell.h, k);
   const hair = 0.16/s;
   /* board bbox in view units: x mirrored for bottom views, y flipped */
   const flip = v.flip || (v.mirror ? "x" : "none");
-  const vb = flip==="x" ? {x1:-model.bb.x2, x2:-model.bb.x1, y1:-model.bb.y2, y2:-model.bb.y1}
-           : flip==="y" ? {x1: model.bb.x1, x2: model.bb.x2, y1: model.bb.y1, y2: model.bb.y2}
-                        : {x1: model.bb.x1, x2: model.bb.x2, y1:-model.bb.y2, y2:-model.bb.y1};
+  const flipBox = b => flip==="x" ? {x1:-b.x2, x2:-b.x1, y1:-b.y2, y2:-b.y1} : flip==="y" ? {x1:b.x1, x2:b.x2, y1:b.y1, y2:b.y2} : {x1:b.x1, x2:b.x2, y1:-b.y2, y2:-b.y1};
+  const vb = flipBox(model.bb), vc = flipBox(ext);
   const cx = cell.x + mL + aw/2, cy = cell.y + mT + ah/2;
-  const tx = cx - s*(vb.x1+vb.x2)/2, ty = cy - s*(vb.y1+vb.y2)/2;
+  const tx = cx - s*(vc.x1+vc.x2)/2, ty = cy - s*(vc.y1+vc.y2)/2;
+  const cy2 = ty + s*vc.y2;                                     /* bottom of the drawn content on paper */
   const cellBounds = {x1:cell.x+1.5*k, y1:cell.y+1.5*k, x2:cell.x+cell.w-1.5*k, y2:cell.y+cell.h-capH};
   const labelBounds = {x1:(cellBounds.x1-tx)/s, y1:(cellBounds.y1-ty)/s, x2:(cellBounds.x2-tx)/s, y2:(cellBounds.y2-ty)/s};
   const r = renderBoardView(model, {side:v.side, flip, mode:v.mode, scale:s, hair, opts:Object.assign({bounds:labelBounds}, v.opts)});
@@ -3251,11 +3383,12 @@ function placeView(model, cell, v){
     const bcx=(model.bb.x1+model.bb.x2)/2, bcy=(model.bb.y1+model.bb.y2)/2;
     const edgeDist = h => Math.min(h.c[0]-model.bb.x1, model.bb.x2-h.c[0], h.c[1]-model.bb.y1, model.bb.y2-h.c[1]);
     /* mounting-size holes are called out one by one; small holes get one callout per size with a count */
-    let big = holes.filter(h=>h.d>=2.0), small = (v.opts && v.opts.smallHoles) ? holes.filter(h=>h.d<2.0) : [];
+    const isBig = h => h.d >= (h.pth ? 2.0 : 1.5);                  /* plain (NPTH) holes from 1.5 mm are mounting holes too */
+    let big = holes.filter(isBig), small = (v.opts && v.opts.smallHoles) ? holes.filter(h=>!isBig(h)) : [];
     if(big.length>12){ small = holes; big = []; }
     const bySize = new Map();
-    small.forEach(h=>{ const key=h.d.toFixed(3); const g=bySize.get(key); if(!g) bySize.set(key,{rep:h,n:1}); else { g.n++; if(edgeDist(h)<edgeDist(g.rep)) g.rep=h; } });
-    const list = big.map(h=>({...h,n:1})).concat([...bySize.values()].map(g=>({...g.rep, n:g.n})));
+    small.forEach(h=>{ const key=h.d.toFixed(3); const g=bySize.get(key); if(!g) bySize.set(key,{rep:h,n:1,members:[h]}); else { g.n++; g.members.push(h); if(edgeDist(h)<edgeDist(g.rep)) g.rep=h; } });
+    const list = big.map(h=>({...h,n:1})).concat([...bySize.values()].map(g=>({...g.rep, n:g.n, members:g.members})));
     list.sort((a,b)=>b.d-a.d);
     const fs=3.3*k, L1=7*k, sh_=3.5*k, sw=0.25;
     const textOf = h => (h.n>1?h.n+"× ":"")+"Ø"+fmtMM(h.d)+(h.pth?" PTH":"");
@@ -3266,19 +3399,21 @@ function placeView(model, cell, v){
       if(v.caption) obs.push({x1:cell.x, y1:by2+mB-4*k, x2:cell.x+cell.w, y2:cell.y+cell.h, hard:true});   /* caption band */
       const all = items.map((h,i)=>{ const q=P(h.c[0],h.c[1]), r0=h.d/2*s, txt=textOf(h);
         const key = `hole|${v.side}|${txt}|${h.c[0].toFixed(2)},${h.c[1].toFixed(2)}`, w=twidth(txt,fs)+fs*0.8, hh=fs*1.25;
-        return {id:"h"+i, key, ax:q[0], ay:q[1], w, h:hh, priority:h.d, home:{x1:q[0]-r0,y1:q[1]-r0,x2:q[0]+r0,y2:q[1]+r0}, allowLeader:true, _q:q, _r:r0, _txt:txt, _ov:OVERRIDES[key]}; });
+        return {id:"h"+i, key, ax:q[0], ay:q[1], w, h:hh, priority:h.d, home:{x1:q[0]-r0,y1:q[1]-r0,x2:q[0]+r0,y2:q[1]+r0}, allowLeader:true, _q:q, _r:r0, _h:h, _txt:txt, _ov:OVERRIDES[key]}; });
       const labels = all.filter(lb=>!lb._ov);
       all.filter(lb=>lb._ov).forEach(lb=>{ const x=lb.ax+lb._ov.dx, y=lb.ay+lb._ov.dy; lb._fixed={x,y,x1:x-lb.w/2,y1:y-lb.h/2,x2:x+lb.w/2,y2:y+lb.h/2}; obs.push(Object.assign({hard:true}, lb._fixed)); });
       const calloutBounds = Object.assign({}, cellBounds, {y2: Math.min(cellBounds.y2, by2+mB-4*k)});
       const placed = placeLabels(labels, obs, calloutBounds, {gap:0.3, maxRings:14, softWeight:3});
       all.forEach(lb=>{
         const pl = lb._fixed || placed.get(lb.id); if(!pl) return;
-        /* leader: from the hole rim toward the label, ending at the label box edge */
-        const dx=pl.x-lb._q[0], dy=pl.y-lb._q[1], d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
-        const x0=lb._q[0]+ux*lb._r, y0=lb._q[1]+uy*lb._r;
-        const ex = Math.max(pl.x1, Math.min(pl.x2, lb._q[0])), ey = Math.max(pl.y1, Math.min(pl.y2, lb._q[1]));
+        /* leaders: from each hole's rim toward the label, ending at the label box edge (every hole of a small group, up to 6) */
+        const holesOf = (lb._h.members && lb._h.members.length>1 && lb._h.members.length<=6) ? lb._h.members : [lb._h];
         g += `<g${dragAttrs(lb.key, 1, pl.x, pl.y, lb._q[0], lb._q[1])}>`;
-        if(Math.hypot(ex-x0,ey-y0) > fs*0.4) g += LN(x0,y0,ex,ey,sw) + `<circle cx="${N4(x0)}" cy="${N4(y0)}" r="${N4(0.35*k)}" fill="${TH.ink}"/>`;
+        holesOf.forEach(hh=>{ const q=P(hh.c[0],hh.c[1]), r0=hh.d/2*s;
+          const dx=pl.x-q[0], dy=pl.y-q[1], d=Math.hypot(dx,dy)||1, ux=dx/d, uy=dy/d;
+          const x0=q[0]+ux*r0, y0=q[1]+uy*r0;
+          const ex = Math.max(pl.x1, Math.min(pl.x2, q[0])), ey = Math.max(pl.y1, Math.min(pl.y2, q[1]));
+          if(Math.hypot(ex-x0,ey-y0) > fs*0.4) g += LN(x0,y0,ex,ey,sw) + `<circle cx="${N4(x0)}" cy="${N4(y0)}" r="${N4(0.35*k)}" fill="${TH.ink}"/>`; });
         g += haloText(pl.x, pl.y+fs*0.36, lb._txt, fs, {anchor:"middle"}) + `</g>`;
         hardBoxes.push({x1:pl.x1,y1:pl.y1,x2:pl.x2,y2:pl.y2});
       });
@@ -3308,12 +3443,13 @@ function placeView(model, cell, v){
     const placed = placeLabels(labels, obs, bounds, {gap:0.3, maxRings:14, softWeight:3});
     all.forEach(lb=>{
       const pl = lb._fixed || placed.get(lb.id); if(!pl) return;
-      /* leader from the feature's edge (nearest bbox point) to the label box */
-      const m=lb._m, hw=m.w/2*s, hh=m.h/2*s;
-      const ex = Math.max(pl.x1, Math.min(pl.x2, lb._q[0])), ey = Math.max(pl.y1, Math.min(pl.y2, lb._q[1]));
-      const sx = Math.max(lb._q[0]-hw, Math.min(lb._q[0]+hw, ex)), sy = Math.max(lb._q[1]-hh, Math.min(lb._q[1]+hh, ey));
+      /* one leader per feature in the group (up to 8), each from the feature's nearest bbox edge to the label box */
+      const m=lb._m, members = (m.members && m.members.length>1 && m.members.length<=8) ? m.members : [m];
       g += `<g${dragAttrs(lb.key, 1, pl.x, pl.y, lb._q[0], lb._q[1])}>`;
-      if(Math.hypot(ex-sx,ey-sy) > fs*0.4) g += LN(sx,sy,ex,ey,sw) + `<circle cx="${N4(sx)}" cy="${N4(sy)}" r="${N4(0.35*k)}" fill="${TH.ink}"/>`;
+      members.forEach(mm=>{ const q=P(mm.cx,mm.cy), hw=mm.w/2*s, hh=mm.h/2*s;
+        const ex = Math.max(pl.x1, Math.min(pl.x2, q[0])), ey = Math.max(pl.y1, Math.min(pl.y2, q[1]));
+        const sx = Math.max(q[0]-hw, Math.min(q[0]+hw, ex)), sy = Math.max(q[1]-hh, Math.min(q[1]+hh, ey));
+        if(Math.hypot(ex-sx,ey-sy) > fs*0.4) g += LN(sx,sy,ex,ey,sw) + `<circle cx="${N4(sx)}" cy="${N4(sy)}" r="${N4(0.35*k)}" fill="${TH.ink}"/>`; });
       g += haloText(pl.x, pl.y+fs*0.36, lb._txt, fs, {anchor:"middle"}) + `</g>`;
       hardBoxes.push({x1:pl.x1,y1:pl.y1,x2:pl.x2,y2:pl.y2});
     });
@@ -3347,8 +3483,9 @@ function placeView(model, cell, v){
     }
   }
   if(v.caption){
-    g += captionT(cell.x+cell.w/2, by2+mB+2*k, v.caption + (r.padsOnly ? " — no components, pads only" : ""), 6.2*k, {anchor:"middle"});
-    g += T(cell.x+cell.w/2, by2+mB+7*k, "SCALE "+scaleLabel(s) + (flip==="x" ? "  ·  VIEWED FROM BOTTOM, BOARD FLIPPED LEFT OVER RIGHT" : flip==="y" ? "  ·  VIEWED FROM BOTTOM, BOARD FLIPPED TOP OVER BOTTOM" : ""), 3*k, {anchor:"middle"});
+    const capY = Math.max(by2, cy2);
+    g += captionT(cell.x+cell.w/2, capY+mB+2*k, v.caption + (r.padsOnly ? " — no components, pads only" : ""), 6.2*k, {anchor:"middle"});
+    g += T(cell.x+cell.w/2, capY+mB+7*k, "SCALE "+scaleLabel(s) + (flip==="x" ? "  ·  VIEWED FROM BOTTOM, BOARD FLIPPED LEFT OVER RIGHT" : flip==="y" ? "  ·  VIEWED FROM BOTTOM, BOARD FLIPPED TOP OVER BOTTOM" : ""), 3*k, {anchor:"middle"});
   }
   return {svg:g, scale:s, bbox:{x1:bx1,y1:by1,x2:bx2,y2:by2}};
 }
@@ -3573,7 +3710,7 @@ function buildAsmSheets(model, D){
   const cg = chromeGeom(sh);
   const sheets=[];
   const views = [];
-  const asmOpts = {refSize:D.asm.refSize, spread:D.asm.spread, values:D.asm.values, pin1:D.asm.pin1, docu:!!D.asm.docu, k,
+  const asmOpts = {refSize:D.asm.refSize, refMin:D.asm.refMin, fitInside:D.asm.fitInside!==false, spread:D.asm.spread, values:D.asm.values, pin1:D.asm.pin1, docu:!!D.asm.docu, k,
                    showHardware:!!D.asm.bomHardware, silk: D.asm.silkViews!==false, smallHoles:!!D.fab.smallHoles};
   const silkOpts = {silk:true, pads:true, vias:false, traces:false, smallHoles:!!D.fab.smallHoles};
   if(D.asm.silkRow){
@@ -3591,20 +3728,45 @@ function buildAsmSheets(model, D){
   const areaHNotes = fh - bottomH - 2*gap;                 /* page that carries the notes */
   const areaHPlain = cg.pnTop - gap - areaTop;              /* page without notes: views may run down to the PN box */
 
-  /* group views into pages */
-  const groups = [];
-  if(D.asm.onePerSheet) views.forEach(v=>groups.push([v]));
-  else if(compact){ for(let i=0;i<views.length;i+=2) groups.push(views.slice(i,i+2)); }
-  else groups.push(views);
-  const pages = groups.map((gv,gi)=>{
-    const notes = gi===groups.length-1;
-    const areaH = notes ? areaHNotes : areaHPlain;
-    const n = gv.length; let best=null;
+  /* best cell arrangement for a group of views on one page */
+  const bestFor = (gv, notesOnPage) => {
+    const areaH = notesOnPage ? areaHNotes : areaHPlain, n = gv.length; let best=null;
     [2,1,n].filter((c,i,a)=>c>=1 && c<=n && a.indexOf(c)===i).forEach(cols=>{
       const rows=Math.ceil(n/cols), cw=(fw-2*gap)/cols, chh=areaH/rows;
-      const sc = pickScale(model.w, model.h, cw-35*k, chh-41*k);
+      const sc = viewScale(model, true, cw-35*k, chh-41*k, cw, chh, k);
       if(!best || sc > best.sc*1.15) best={cols, rows, cw, chh, sc};
     });
+    if(n===1 && !notesOnPage){            /* a lone view may also use the full-height column left of the title block */
+      const cw = noteW, chh = fy+fh-gap-areaTop, sc = viewScale(model, true, cw-35*k, chh-41*k, cw, chh, k);
+      if(sc > best.sc*1.15) best = {cols:1, rows:1, cw, chh, sc};
+    }
+    return best;
+  };
+  /* how crowded the designators would be at a given scale: label area over board area on paper (the renderer
+     starts shrinking labels above 0.30) */
+  const labelDensity = sc => { const fs = D.asm.refSize||2, ba = model.w*model.h*sc*sc; let worst = 0;
+    ["top","bottom"].forEach(side=>{ const la = model.parts.filter(pt=>pt.side===side && (D.asm.bomHardware || !pt.hardware))
+      .reduce((a,pt)=> a + (((D.asm.values&&pt.value)?pt.value:pt.ref).length*0.62+0.35)*fs*fs*1.05, 0); if(ba>0) worst = Math.max(worst, la/ba); });
+    return worst; };
+  /* group views into pages */
+  const layout = D.asm.layout || (D.asm.onePerSheet ? "one" : "auto");
+  const silkViews = views.filter(v=>v.mode==="silk"), asmViews = views.filter(v=>v.mode==="asm");
+  const rowGroups = []; if(compact){ for(let i=0;i<views.length;i+=2) rowGroups.push(views.slice(i,i+2)); } else rowGroups.push(views);
+  let mode = layout;
+  if(layout==="auto"){
+    const gi = rowGroups.findIndex(g=>g.indexOf(asmViews[0])>=0);
+    const rowSc = bestFor(rowGroups[gi], gi===rowGroups.length-1).sc;
+    mode = labelDensity(rowSc) > 0.22 ? "dense" : "row";
+  }
+  const groups = [];
+  if(mode==="one"){ views.forEach(v=>groups.push([v])); groups.push([]); }                       /* every view alone, notes on their own sheet */
+  else if(mode==="dense"){ if(compact){ for(let i=0;i<silkViews.length;i+=2) groups.push(silkViews.slice(i,i+2)); } else if(silkViews.length) groups.push(silkViews);
+    asmViews.forEach(v=>groups.push([v])); groups.push([]); }                                       /* silk views paired, each assembly view alone, notes sheet */
+  else rowGroups.forEach(g=>groups.push(g));
+  const pages = groups.map((gv,gi)=>{
+    const notes = gi===groups.length-1;
+    if(!gv.length) return { notes, sc:1, views:[] };
+    const best = bestFor(gv, notes);
     return { notes, sc:best.sc, views: gv.map((v,i)=>{ const r=Math.floor(i/best.cols), c=i%best.cols;
       return {v, cell:{x:fx+gap+c*best.cw, y:areaTop+r*best.chh, w:best.cw, h:best.chh}}; }) };
   });
@@ -3615,8 +3777,9 @@ function buildAsmSheets(model, D){
     const ch = chromeSvg(sh, D, "asm", i+1, total);
     let g = ch.svg;
     pg.views.forEach(pv=>{ g += placeView(model, pv.cell, Object.assign({k, forceScale:pg.sc}, pv.v)).svg; });
-    if(pg.notes) g += notesSvg(fx+gap, fy+fh-bottomH+gap*0.5, noteW, D.asmNotes, k, nfs).svg;
-    const nm = pg.views.length===1 ? pg.views[0].v.caption : (pg.views[0].v.mode==="silk" ? "Silkscreen" : "Assembly");
+    if(pg.notes) g += pg.views.length ? notesSvg(fx+gap, fy+fh-bottomH+gap*0.5, noteW, D.asmNotes, k, nfs).svg
+                                      : notesSvg(fx+gap, areaTop, noteW, D.asmNotes, k, (compact?3.2:3.6)*k).svg;
+    const nm = pg.views.length===0 ? "Notes" : pg.views.length===1 ? pg.views[0].v.caption : (pg.views[0].v.mode==="silk" ? "Silkscreen" : "Assembly");
     sheets.push({views:VIEW_REG.splice(0), svg:sheetWrap(sh, g, k), w:W, h:H, name:"Assembly Drawing"+(pages.length>1?` — ${nm}`:""), page:"asm"});
   });
   plPages.forEach((body,i)=>{
@@ -3975,7 +4138,7 @@ const DEFAULTS = {
         removePN:"Yes", peelable:"None", ul:"None", dateCode:"None", engineer:"", special:[], specialText:""},
   stack:{source:"pcbway", custom:null},
   fab:{silk:true, pads:true, vias:true, traces:false, dims:true, holeCallouts:true, smallHoles:false, millCallouts:true, stackDiagram:true, drillTable:true, ndaa:false, autoNotes:true, notes:""},
-  asm:{silkRow:true, onePerSheet:false, docu:false, pin1:true, spread:true, values:false, partsList:true, bomHardware:false, silkViews:true, refSize:2.0, notes:DEFAULT_ASM_NOTES},
+  asm:{silkRow:true, layout:"auto", onePerSheet:false, docu:false, fitInside:true, refMin:0.8, pin1:true, spread:true, values:false, partsList:true, bomHardware:false, silkViews:true, refSize:2.0, notes:DEFAULT_ASM_NOTES},
   logo:null, overrides:{}, annotations:[]
 };
 let cfg = JSON.parse(JSON.stringify(DEFAULTS));
@@ -4058,12 +4221,12 @@ const TEXT_FIELDS = [
   ["s-material","spec.material"],["s-tg","spec.tg"],["s-thickness","spec.thickness"],["s-trackSpace","spec.trackSpace"],["s-minHole","spec.minHole"],["s-mask","spec.mask"],["s-silk","spec.silk"],
   ["s-edgeConn","spec.edgeConn"],["s-bevel","spec.bevel"],["s-finish","spec.finish"],["s-auThk","spec.auThk"],["s-enepig","spec.enepig"],["s-via","spec.via"],["s-holeCu","spec.holeCu"],["s-cuOuter","spec.cuOuter"],["s-cuInner","spec.cuInner"],
   ["s-removePN","spec.removePN"],["s-peelable","spec.peelable"],["s-ul","spec.ul"],["s-dateCode","spec.dateCode"],["s-engineer","spec.engineer"],["s-special","spec.specialText"],
-  ["s-stackSource","stack.source"],["f-notes","fab.notes"],["a-notes","asm.notes"]
+  ["s-stackSource","stack.source"],["f-notes","fab.notes"],["a-notes","asm.notes"],["a-layout","asm.layout"]
 ];
 const CHECK_FIELDS = [
   ["s-zones","zones"],["s-realistic","realistic"],["f-silk","fab.silk"],["f-pads","fab.pads"],["f-vias","fab.vias"],["f-traces","fab.traces"],["f-dims","fab.dims"],["f-holeCallouts","fab.holeCallouts"],["f-smallHoles","fab.smallHoles"],["f-millCallouts","fab.millCallouts"],
   ["f-stackDiagram","fab.stackDiagram"],["f-drillTable","fab.drillTable"],["f-ndaa","fab.ndaa"],["f-autoNotes","fab.autoNotes"],
-  ["a-silkRow","asm.silkRow"],["a-onePerSheet","asm.onePerSheet"],["a-docu","asm.docu"],["a-pin1","asm.pin1"],["a-spread","asm.spread"],["a-values","asm.values"],["a-partsList","asm.partsList"],["a-bomHardware","asm.bomHardware"],["a-silkViews","asm.silkViews"]
+  ["a-silkRow","asm.silkRow"],["a-fitInside","asm.fitInside"],["a-docu","asm.docu"],["a-pin1","asm.pin1"],["a-spread","asm.spread"],["a-values","asm.values"],["a-partsList","asm.partsList"],["a-bomHardware","asm.bomHardware"],["a-silkViews","asm.silkViews"]
 ];
 function bindAll(){
   TEXT_FIELDS.forEach(([id,path])=>{ const el=$(id); if(!el) return;
@@ -4074,6 +4237,7 @@ function bindAll(){
     cb.addEventListener("change", ()=>{ const s=new Set(cfg.spec.special); if(cb.checked) s.add(cb.dataset.sp); else s.delete(cb.dataset.sp); cfg.spec.special=[...s]; onChange("spec.special"); });
   });
   $("a-refSize").addEventListener("input", e=>{ cfg.asm.refSize = +e.target.value/10; $("a-refSizeV").textContent=cfg.asm.refSize.toFixed(1)+" mm"; onChange("asm.refSize"); });
+  $("a-refMin").addEventListener("input", e=>{ cfg.asm.refMin = +e.target.value/10; $("a-refMinV").textContent=cfg.asm.refMin.toFixed(1)+" mm"; onChange("asm.refMin"); });
   $("s-textScale").addEventListener("input", e=>{ cfg.textScale = +e.target.value/100; $("s-textScaleV").textContent=Math.round(cfg.textScale*100)+"%"; onChange("textScale"); });
 }
 /* push cfg into every control (init, settings import, per-board restore) */
@@ -4082,6 +4246,7 @@ function syncForm(){
   CHECK_FIELDS.forEach(([id,path])=>{ const el=$(id); if(el) el.checked=!!getP(cfg,path); });
   document.querySelectorAll("#specialopts input").forEach(cb=>{ cb.checked = cfg.spec.special.indexOf(cb.dataset.sp)>=0; });
   $("a-refSize").value = Math.round(cfg.asm.refSize*10); $("a-refSizeV").textContent = (+cfg.asm.refSize).toFixed(1)+" mm";
+  $("a-refMin").value = Math.round((cfg.asm.refMin||0.8)*10); $("a-refMinV").textContent = (+(cfg.asm.refMin||0.8)).toFixed(1)+" mm";
   $("s-textScale").value = Math.round((cfg.textScale||1)*100); $("s-textScaleV").textContent = Math.round((cfg.textScale||1)*100)+"%";
   renderLogoPrev(); renderVendorPrev();
 }
@@ -4094,15 +4259,18 @@ function saveBoardSettings(){
   catch(e){ try{ localStorage.setItem(key, JSON.stringify(Object.assign({}, snap, {vendorImg:null}))); }catch(e2){} }
 }
 let importedPending = false;          /* a settings file was loaded before a board: keep it for that board */
-function applySettings(obj, sourceLabel){
+function applySettings(obj, sourceLabel, opts){
+  opts = opts||{};
   importedPending = true;
   const fresh = JSON.parse(JSON.stringify(DEFAULTS));
-  deepMerge(fresh, migrateTb(obj.cfg || obj));
+  deepMerge(fresh, migrateTb(JSON.parse(JSON.stringify(obj.cfg || obj))));     /* own copy: the live cfg must never alias the imported object */
   if(!Array.isArray(fresh.spec.special)) fresh.spec.special = [];
   if(!Array.isArray(fresh.annotations)) fresh.annotations = []; if(!fresh.overrides || typeof fresh.overrides!=="object") fresh.overrides = {};
   cfg = fresh; window.__pcbdg.cfg = cfg;
   if(obj.vendorImg && obj.vendorImg.src) vendorImg = obj.vendorImg;
-  syncForm(); save(); renderStackEditor(); renderAutoNotes(); renderOverrideNote();
+  syncForm(); renderStackEditor(); renderAutoNotes(); renderOverrideNote();
+  if(opts.defer) return;            /* a board follows immediately (project file): nothing is saved under the old board's name and nothing is re-rendered */
+  save();
   $("settingsnote").innerHTML = sourceLabel ? `Settings restored from <b>${esc(sourceLabel)}</b>.` : "";
   if(model){ $("s-layers").value = `${layerCount()} Layers`; runChecks(); rebuild(); showSheet(); }
 }
@@ -4117,10 +4285,47 @@ $("btn-loadSettings").addEventListener("click", ()=>$("settingsinput").click());
 $("settingsinput").addEventListener("change", e=>{ const f=e.target.files[0]; if(f) handleSettingsFile(f); e.target.value=""; });
 function handleSettingsFile(file){
   const fr=new FileReader();
-  fr.onload=()=>{ try{ const obj=JSON.parse(fr.result); if(!obj || (obj.app!=="pcbdg" && !obj.cfg && !obj.tb)) throw new Error("not a settings file");
-      applySettings(obj, file.name); }catch(err){ $("settingsnote").innerHTML = `<span class="warn">Couldn't read ${esc(file.name)}: ${esc(err.message)}</span>`; } };
+  fr.onload=()=>{ try{ const obj=JSON.parse(fr.result); if(!obj || (obj.app!=="pcbdg" && !obj.cfg && !obj.tb)) throw new Error("not a settings or project file");
+      if(obj.kind==="project") applyProject(obj, file.name); else applySettings(obj, file.name); }catch(err){ $("settingsnote").innerHTML = `<span class="warn">Couldn't read ${esc(file.name)}: ${esc(err.message)}</span>`; } };
   fr.readAsText(file);
 }
+/* ---------- project file: board + settings + notes + hand-assembly progress in one .pcbdg (JSON) ---------- */
+const b64ofBytes = bytes => { let s=""; for(let i=0;i<bytes.length;i+=0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000)); return btoa(s); };
+const bytesOfB64 = b64 => { const bin=atob(b64), out=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; };
+async function gzipText(text){ if(typeof CompressionStream==="undefined") throw new Error("this browser cannot compress (CompressionStream missing)");
+  const buf = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer(); return b64ofBytes(new Uint8Array(buf)); }
+async function gunzipText(b64){ if(typeof DecompressionStream==="undefined") throw new Error("this browser cannot decompress (DecompressionStream missing)");
+  return new Response(new Blob([bytesOfB64(b64)]).stream().pipeThrough(new DecompressionStream("gzip"))).text(); }
+async function projectSnapshot(){
+  if(!model || !rawXml) throw new Error("no board loaded");
+  let build = null; try{ build = JSON.parse(localStorage.getItem(buildKey())||"null"); }catch(e){}
+  return {app:"pcbdg", kind:"project", version:1, tool:TOOL_VERSION, savedAt:new Date().toISOString(),
+          board:{name:model.name, file:model.fileName||(model.name+".brd"), gz:await gzipText(rawXml)}, settings:settingsSnapshot(), build};
+}
+async function applyProject(obj, label){
+  try{
+    if(!obj || obj.kind!=="project" || !obj.board || !obj.board.gz) throw new Error("not a project file");
+    $("settingsnote").textContent = "Opening project…";
+    const text = await gunzipText(obj.board.gz);
+    const file = obj.board.file || ((obj.board.name||"board")+".brd"), name = file.replace(/\.[^.]+$/,"");
+    try{ localStorage.removeItem("pcbdg.board."+name); }catch(e){}                      /* the project's settings win over anything remembered for that board name */
+    if(obj.build){ try{ localStorage.setItem("pcbdg.build."+name, JSON.stringify(obj.build)); }catch(e){} } else { try{ localStorage.removeItem("pcbdg.build."+name); }catch(e){} }
+    BUILD.forBoard = null;
+    if(obj.settings) applySettings(obj.settings, label, {defer:true}); else importedPending = true;
+    loadText(text, file);
+    const n = (cfg.annotations||[]).length, placed = obj.build && obj.build.placed ? Object.keys(obj.build.placed).length : 0;
+    $("settingsnote").innerHTML = `Project <b>${esc(label||name)}</b> opened: board, settings${n?`, ${n} note${n>1?"s":""}`:""}${placed?`, ${placed} placed group${placed>1?"s":""}`:""}` +
+      (obj.savedAt ? ` (saved ${esc(new Date(obj.savedAt).toLocaleString())}${obj.tool?` with v${esc(obj.tool)}`:""})` : "") + ".";
+  }catch(err){ $("settingsnote").innerHTML = `<span class="warn">Couldn't open the project: ${esc(err.message)}</span>`; console.error(err); }
+}
+$("btn-saveProject").addEventListener("click", async ()=>{
+  if(!model) return;
+  try{ const snap = await projectSnapshot();
+    const name = `${(cfg.tb.partNumber || model.name).replace(/[^\w.-]+/g,"_")}.pcbdg`;
+    const blob = new Blob([JSON.stringify(snap)], {type:"application/json"}); download(name, blob);
+    $("settingsnote").innerHTML = `Project saved as <b>${esc(name)}</b> (${(blob.size/1024).toFixed(0)} KB). Anyone can drop it on this page to get the board, settings, notes and build progress.`;
+  }catch(err){ $("settingsnote").innerHTML = `<span class="warn">Couldn't save the project: ${esc(err.message)}</span>`; console.error(err); }
+});
 let raf=0;
 function onChange(path){
   save();
@@ -4378,18 +4583,258 @@ function rebuild(){
   const D = derive();
   docs.fab = buildFabSheets(model, D);
   docs.asm = buildAsmSheets(model, D);
-  if(cur.idx >= docs[cur.doc].length) cur.idx = 0;
+  BUILD.cache = {};
+  if(docs[cur.doc] && cur.idx >= docs[cur.doc].length) cur.idx = 0;
 }
+
+/* ================================================================== hand assembly (build) mode
+   One row per value + package (+ part number) per side, i.e. one bag or reel. Selecting a row lights every part of
+   that group on a large board view; placed groups are remembered per board in localStorage. */
+const BUILD = { forBoard:null, groups:[], visible:[], refKey:{}, sel:null, side:"top", sort:"size", q:"", placed:{}, labels:true, cache:{}, pz:null, hoverEl:null };
+const buildKey = () => model ? "pcbdg.build."+model.name : null;
+function buildLoad(){
+  BUILD.placed = {}; BUILD.side = "top"; BUILD.sel = null; BUILD.q = "";
+  try{ const st = JSON.parse(localStorage.getItem(buildKey())||"null");
+    if(st){ BUILD.placed = {}; Object.keys(st.placed||{}).forEach(k=>{            /* keys saved as "side|value|pkg|mpn|DNP" become the JSON form */
+        if(k[0]!=="[" && k.indexOf("|")>=0){ const a = k.split("|"); if(a.length===5){ BUILD.placed[JSON.stringify([a[0],a[1],a[2],a[3],a[4]==="DNP"])] = true; return; } }
+        BUILD.placed[k] = true; });
+      if(st.side) BUILD.side = st.side; if(st.sort) BUILD.sort = st.sort; if(st.labels!=null) BUILD.labels = !!st.labels; } }catch(e){}
+}
+function buildSave(){ try{ localStorage.setItem(buildKey(), JSON.stringify({placed:BUILD.placed, side:BUILD.side, sort:BUILD.sort, labels:BUILD.labels, savedAt:new Date().toISOString()})); }catch(e){} }
+function buildGroups(){
+  const g = new Map(); BUILD.refKey = {};
+  model.parts.forEach(pt=>{
+    if(pt.hardware) return;
+    const a = pt.attrs||{};
+    const mpn = pick(a,["MPN","MANUFACTURER_PART_NUMBER","MANUFACTURER_PN","MFG_PN","MF_PN","PARTNO","PART_NUMBER","PN"]);
+    const mfr = pick(a,["MANUFACTURER","MFR","MF","MANUFACTURER_NAME","MFG"]), desc = pick(a,["DESCRIPTION","DESC"]);
+    const key = JSON.stringify([pt.side, pt.value||"", pt.pkg||"", mpn, !!pt.dnp]);
+    if(!g.has(key)) g.set(key, {key, side:pt.side, value:pt.value||"", pkg:pt.pkg||"", mpn, mfr, desc, dnp:!!pt.dnp, parts:[], tht:false, area:0});
+    const r = g.get(key); r.parts.push(pt); if(pt.pads.some(pd=>pd.kind==="tht")) r.tht = true; r.area += pt.area||0; BUILD.refKey[pt.ref] = key;
+  });
+  const rows = [...g.values()];
+  rows.forEach(r=>{ r.parts.sort((a,b)=>a.ref.localeCompare(b.ref,undefined,{numeric:true})); r.refs = r.parts.map(p=>p.ref); r.qty = r.parts.length; r.area /= r.qty; });
+  const byRef = (a,b)=> a.refs[0].localeCompare(b.refs[0],undefined,{numeric:true});
+  const sideOrd = x => x.side==="top" ? 0 : 1;
+  rows.sort((a,b)=> (a.dnp-b.dnp) || (sideOrd(a)-sideOrd(b)) ||
+    (BUILD.sort==="size"  ? ((a.tht-b.tht) || (a.area-b.area) || a.pkg.localeCompare(b.pkg) || byRef(a,b)) :
+     BUILD.sort==="value" ? (a.value.localeCompare(b.value,undefined,{numeric:true}) || a.pkg.localeCompare(b.pkg) || byRef(a,b)) : byRef(a,b)));
+  return rows;
+}
+function buildBoardSvg(side){
+  if(BUILD.cache[side]) return BUILD.cache[side];
+  const s = 3, hair = 0.16/s, m = 3;
+  const flip = side==="bottom" ? ((cfg.bottomFlip==="x"||cfg.bottomFlip==="y") ? cfg.bottomFlip : detectBottomFlip(model)) : "none";
+  const bb = model.bb;
+  const vb = flip==="x" ? {x1:-bb.x2, x2:-bb.x1, y1:-bb.y2, y2:-bb.y1} : flip==="y" ? {x1:bb.x1, x2:bb.x2, y1:bb.y1, y2:bb.y2} : {x1:bb.x1, x2:bb.x2, y1:-bb.y2, y2:-bb.y1};
+  const r = renderBoardView(model, {side, flip, mode:"asm", scale:s, hair, opts:{silk:true, pin1:!!cfg.asm.pin1, spread:true, refSize:cfg.asm.refSize||2, refMin:cfg.asm.refMin||0.8, fitInside:cfg.asm.fitInside!==false, values:false, showHardware:false, docu:false, k:1,
+                                    bounds:{x1:vb.x1-m, y1:vb.y1-m, x2:vb.x2+m, y2:vb.y2+m}}});
+  const A = th => flip==="x" ? (180+th) : flip==="y" ? th : (-th);
+  const N = v => (+v).toFixed(3);
+  const ov = model.parts.filter(pt=>pt.side===side && !pt.hardware).map(pt=>{
+    const pads = [];
+    const cuL = side==="top" ? 1 : 16;
+    pt.pads.forEach(pd=>{ const q = r.p(pd.c[0], pd.c[1]), t = ` transform="translate(${N(q[0])} ${N(q[1])}) rotate(${N(A(pd.ang||0))})"`;
+      if(pd.kind==="rect"){ if(pd.layer!==cuL) return;                                     /* only this side's copper, like the base render */
+        pads.push(`<rect x="${N(-pd.w/2)}" y="${N(-pd.h/2)}" width="${N(pd.w)}" height="${N(pd.h)}"${pd.rx?` rx="${N(pd.rx)}"`:""}${t}/>`); }
+      else if(pd.kind==="tht"){
+        if(pd.shape==="square") pads.push(`<rect x="${N(-pd.r)}" y="${N(-pd.r)}" width="${N(pd.r*2)}" height="${N(pd.r*2)}"${t}/>`);
+        else if(pd.shape==="octagon"){ const rr=pd.r, kk=rr*Math.tan(Math.PI/8); pads.push(`<path d="M${N(-kk)} ${N(-rr)}L${N(kk)} ${N(-rr)}L${N(rr)} ${N(-kk)}L${N(rr)} ${N(kk)}L${N(kk)} ${N(rr)}L${N(-kk)} ${N(rr)}L${N(-rr)} ${N(kk)}L${N(-rr)} ${N(-kk)}Z"${t}/>`); }
+        else if(pd.shape==="long"||pd.shape==="offset") pads.push(`<rect x="${N(-pd.len/2)}" y="${N(-pd.r)}" width="${N(pd.len)}" height="${N(pd.r*2)}" rx="${N(pd.r)}"${t}/>`);
+        else pads.push(`<circle cx="${N(q[0])}" cy="${N(q[1])}" r="${N(pd.r)}"/>`); } });
+    const q1 = r.p(pt.ext.x1, pt.ext.y1), q2 = r.p(pt.ext.x2, pt.ext.y2);
+    const x1 = Math.min(q1[0],q2[0]), y1 = Math.min(q1[1],q2[1]), w = Math.abs(q2[0]-q1[0]), h = Math.abs(q2[1]-q1[1]);
+    const pad = 0.25, c = r.p(pt.cx, pt.cy);
+    const fs = Math.max(0.55, Math.min(1.6, Math.min(w,h)*0.45));
+    const marks = (pt.marks||[]).map(mk=>{ const q = r.p(mk.c[0], mk.c[1]);
+      return `<circle class="mk" cx="${N(q[0])}" cy="${N(q[1])}" r="${N(Math.max(0.22, fs*0.3))}"/>` +
+             (mk.kind!=="1" ? `<text class="mkt" x="${N(q[0])}" y="${N(q[1])}" dy="0.35em" text-anchor="middle" font-size="${N(Math.max(0.3, fs*0.5))}">${mk.kind}</text>` : ""); }).join("");
+    return `<g class="part${pt.dnp?" dnp":""}" data-part="${esc(pt.ref)}"><rect class="box" x="${N(x1-pad)}" y="${N(y1-pad)}" width="${N(w+2*pad)}" height="${N(h+2*pad)}" rx="${N(pad)}"/>`+
+           `<g class="pads">${pads.join("")}</g>${marks}<text class="lbl" x="${N(c[0])}" y="${N(c[1])}" dy="0.35em" text-anchor="middle" font-size="${N(fs)}">${esc(pt.ref)}</text></g>`;
+  }).join("");
+  const box = {x:vb.x1-m, y:vb.y1-m, w:vb.x2-vb.x1+2*m, h:vb.y2-vb.y1+2*m};
+  const fade = `<rect class="fade" x="${N(box.x)}" y="${N(box.y)}" width="${N(box.w)}" height="${N(box.h)}" fill="${TH.paper}"/>`;
+  const out = {svg:`<g class="base">${r.svg}</g>${fade}<g class="parts">${ov}</g>`, vb:box, flip};
+  BUILD.cache[side] = out; return out;
+}
+/* wheel zoom + drag pan for a stand-alone SVG (viewBox based, letterbox-safe) */
+function attachPanZoom(svg, vb0){
+  const st = {x:vb0.x, y:vb0.y, w:vb0.w, h:vb0.h, lastDrag:false};
+  const apply = ()=> svg.setAttribute("viewBox", `${st.x} ${st.y} ${st.w} ${st.h}`);
+  const toUser = (cx,cy)=>{ const m = svg.getScreenCTM(); if(!m) return [st.x, st.y]; const q = new DOMPoint(cx,cy).matrixTransform(m.inverse()); return [q.x, q.y]; };
+  svg.addEventListener("wheel", e=>{ e.preventDefault(); const [qx,qy] = toUser(e.clientX, e.clientY);
+    const fx=(qx-st.x)/st.w, fy=(qy-st.y)/st.h, kz = e.deltaY>0 ? 1.12 : 1/1.12;
+    const nw = Math.min(vb0.w*4, Math.max(vb0.w/80, st.w*kz)), nh = nw*vb0.h/vb0.w;
+    st.x += (st.w-nw)*fx; st.y += (st.h-nh)*fy; st.w = nw; st.h = nh; apply(); }, {passive:false});
+  let drag = null;
+  svg.addEventListener("pointerdown", e=>{ drag = {x:e.clientX, y:e.clientY, px:st.x, py:st.y, moved:false, id:e.pointerId}; st.lastDrag = false; });
+  svg.addEventListener("pointermove", e=>{ if(!drag) return; const m = svg.getScreenCTM(); if(!m) return;
+    if(!drag.moved && Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y) > 3){ drag.moved = true; svg.classList.add("drag"); try{ svg.setPointerCapture(drag.id); }catch(err){} }   /* capture only once it is a drag, so a plain click keeps its target */
+    if(drag.moved){ st.x = drag.px - (e.clientX-drag.x)/m.a; st.y = drag.py - (e.clientY-drag.y)/m.d; apply(); } });
+  const up = ()=>{ if(drag){ st.lastDrag = drag.moved; } drag = null; svg.classList.remove("drag"); };
+  svg.addEventListener("pointerup", up); svg.addEventListener("pointercancel", up);
+  return {
+    fit: ()=>{ st.x=vb0.x; st.y=vb0.y; st.w=vb0.w; st.h=vb0.h; apply(); },
+    zoomTo: b=>{ const padd = Math.max(b.w, b.h)*0.5 + 1.5; let w = b.w+2*padd, h = b.h+2*padd;
+      if(w/h > vb0.w/vb0.h) h = w*vb0.h/vb0.w; else w = h*vb0.w/vb0.h;
+      w = Math.min(w, vb0.w*1.1); h = w*vb0.h/vb0.w;
+      st.x = b.x+b.w/2-w/2; st.y = b.y+b.h/2-h/2; st.w = w; st.h = h; apply(); },
+    wasDrag: ()=> st.lastDrag
+  };
+}
+function buildFiltered(){
+  const q = BUILD.q.trim().toLowerCase(); if(!q) return BUILD.groups;
+  const terms = q.split(/\s+/);
+  /* a term that is exactly some designator (R7, IC10) matches that designator only, never R70 or an MPN containing "R7";
+     any other term is a substring match over value, package, part number, manufacturer, description and refs */
+  const allRefs = new Set(); BUILD.groups.forEach(g=>g.refs.forEach(r=>allRefs.add(r.toLowerCase())));
+  return BUILD.groups.filter(g=>{
+    const hay = [g.value, g.pkg, g.mpn, g.mfr, g.desc, g.refs.join(" "), g.side].join(" ").toLowerCase();
+    const refs = g.refs.map(r=>r.toLowerCase());
+    return terms.every(t=> allRefs.has(t) ? refs.indexOf(t)>=0 : hay.indexOf(t)>=0); });
+}
+function buildRenderList(){
+  const el = $("blist"); if(!el) return;
+  const rows = buildFiltered(); BUILD.visible = rows;
+  const both = model.parts.some(p=>p.side==="bottom" && !p.hardware) && model.parts.some(p=>p.side==="top" && !p.hardware);
+  el.innerHTML = rows.length ? rows.map(g=>`<div class="brow${g.key===BUILD.sel?" sel":""}${BUILD.placed[g.key]?" done":""}${g.dnp?" dnp":""}" data-key="${esc(g.key)}">`+
+      `<input type="checkbox"${BUILD.placed[g.key]?" checked":""} title="Placed">`+
+      `<div class="bmain"><div class="bval"><b>${g.value ? esc(g.value) : "(no value)"}</b><span class="bpkg">${esc(g.pkg)}</span><span class="bqty">×${g.qty}</span>`+
+      `${both?`<span class="btag">${g.side}</span>`:""}${g.tht?`<span class="btag">THT</span>`:""}${g.dnp?`<span class="btag warn">DNP · skip</span>`:""}${!g.value?`<span class="btag warn">no value</span>`:""}</div>`+
+      `<div class="brefs">${esc(g.refs.join(", "))}</div>${(g.mpn||g.desc||g.mfr)?`<div class="bmpn">${esc([g.mfr,g.mpn,g.desc].filter(Boolean).join(" · "))}</div>`:""}</div></div>`).join("")
+    : `<div class="build-empty">${BUILD.groups.length ? "No parts match the search." : "No components on this board: only pads, test points, fiducials or mounting holes."}</div>`;
+}
+function buildHighlight(){
+  const svg = wrap.querySelector("#bboard svg"); if(!svg) return;
+  const sel = BUILD.sel ? BUILD.groups.find(g=>g.key===BUILD.sel) : null;
+  const refs = new Set();
+  if(sel) sel.parts.forEach(p=>refs.add(p.ref));
+  else if(BUILD.q.trim()) buildFiltered().forEach(g=>g.parts.forEach(p=>refs.add(p.ref)));      /* a search with no row picked lights every match */
+  svg.classList.toggle("sel", refs.size>0);
+  svg.querySelectorAll(".part").forEach(g=>{ const ref = g.dataset.part; g.classList.toggle("hl", refs.has(ref)); g.classList.toggle("done", !!BUILD.placed[BUILD.refKey[ref]]); });
+}
+function buildProgress(){
+  const gs = BUILD.groups.filter(g=>!g.dnp), done = gs.filter(g=>BUILD.placed[g.key]);
+  const parts = gs.reduce((a,g)=>a+g.qty,0), pdone = done.reduce((a,g)=>a+g.qty,0);
+  const el = $("bprog"); if(el) el.textContent = `${done.length} / ${gs.length} groups · ${pdone} / ${parts} parts placed`;
+  const bar = $("bbar"); if(bar) bar.style.width = (parts ? pdone/parts*100 : 0).toFixed(1)+"%";
+}
+function buildSelect(key, opts){
+  opts = opts||{};
+  BUILD.sel = key||null;
+  const g = key ? BUILD.groups.find(x=>x.key===key) : null;
+  if(g && BUILD.q.trim() && !buildFiltered().some(x=>x.key===key)){ BUILD.q = ""; const si = $("bsearch"); if(si) si.value = ""; buildRenderList(); }   /* a clicked part always shows its row */
+  if(g && g.side!==BUILD.side){ BUILD.side = g.side; buildSave(); showBuild(); return; }
+  const list = $("blist"); if(list) list.querySelectorAll(".brow").forEach(r=> r.classList.toggle("sel", r.dataset.key===BUILD.sel));
+  buildHighlight();
+  const row = list && list.querySelector(".brow.sel"); if(row) row.scrollIntoView({block:"nearest"});
+  if(opts.zoom) buildZoomSel();
+}
+function buildZoomSel(){
+  const svg = wrap.querySelector("#bboard svg"); if(!svg || !BUILD.pz) return;
+  let b = null;
+  svg.querySelectorAll(".part.hl .box").forEach(r=>{ const x=+r.getAttribute("x"), y=+r.getAttribute("y"), w=+r.getAttribute("width"), h=+r.getAttribute("height");
+    b = b ? {x1:Math.min(b.x1,x), y1:Math.min(b.y1,y), x2:Math.max(b.x2,x+w), y2:Math.max(b.y2,y+h)} : {x1:x, y1:y, x2:x+w, y2:y+h}; });
+  if(b) BUILD.pz.zoomTo({x:b.x1, y:b.y1, w:b.x2-b.x1, h:b.y2-b.y1}); else BUILD.pz.fit();
+}
+function buildSetPlaced(key, on){
+  if(on) BUILD.placed[key] = true; else delete BUILD.placed[key];
+  buildSave();
+  const list = $("blist"); if(list) list.querySelectorAll(".brow").forEach(r=>{ if(r.dataset.key===key){ r.classList.toggle("done", !!on); const c=r.querySelector("input"); if(c) c.checked = !!on; } });
+  buildHighlight(); buildProgress();
+}
+function buildStep(dir){
+  const rows = BUILD.visible; if(!rows.length) return;
+  let i = rows.findIndex(g=>g.key===BUILD.sel); i = i<0 ? (dir>0 ? 0 : rows.length-1) : Math.max(0, Math.min(rows.length-1, i+dir));
+  buildSelect(rows[i].key);
+}
+function showBuild(){
+  closeNoteEditor();
+  if(!model) return;
+  if(BUILD.forBoard!==model.name){ buildLoad(); BUILD.forBoard = model.name; }
+  BUILD.groups = buildGroups();
+  const hasBottom = model.parts.some(pt=>pt.side==="bottom" && !pt.hardware), hasTop = model.parts.some(pt=>pt.side==="top" && !pt.hardware);
+  if(BUILD.side==="bottom" && !hasBottom) BUILD.side = "top";
+  if(BUILD.side==="top" && !hasTop && hasBottom) BUILD.side = "bottom";
+  const bd = buildBoardSvg(BUILD.side);
+  const viewNote = BUILD.side==="bottom" ? (bd.flip==="x" ? "viewed from the bottom, board flipped left over right" : "viewed from the bottom, board flipped top over bottom") : "viewed from the top";
+  wrap.innerHTML = `<div class="build">
+    <div class="build-board" id="bboard">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="${bd.vb.x} ${bd.vb.y} ${bd.vb.w} ${bd.vb.h}" style="background:${TH.paper}" class="${BUILD.labels?"":"nolabels"}">${bd.svg}</svg>
+      <div class="build-tools">
+        <div class="seg" id="bside"><button data-side="top" aria-pressed="${BUILD.side==="top"}"${hasTop?"":" disabled"}>Top</button><button data-side="bottom" aria-pressed="${BUILD.side==="bottom"}"${hasBottom?"":" disabled"}>Bottom</button></div>
+        <button class="btn sm" data-bz="fit" title="Fit the whole board">fit</button>
+        <button class="btn sm" data-bz="sel" title="Zoom to the highlighted parts (Z)">zoom to selection</button>
+        <label class="row"><input type="checkbox" id="blabels"${BUILD.labels?" checked":""}> designators</label>
+      </div>
+      <div class="tip">${viewNote} &middot; scroll to zoom &middot; drag to pan &middot; click a part to find its row</div>
+      <div class="build-tip" id="btip" hidden></div>
+    </div>
+    <div class="build-panel">
+      <div class="build-head">
+        <input class="txt" id="bsearch" placeholder="Search value, package, designator, part number…" value="${esc(BUILD.q)}" autocomplete="off" spellcheck="false">
+        <div class="row2"><label class="field" style="flex:1;flex-direction:row;align-items:center;gap:6px">Order <select id="bsort" class="txt" style="width:auto;flex:1"><option value="size">smallest parts first</option><option value="ref">by designator</option><option value="value">by value</option></select></label><button class="btn sm" id="breset" title="Clear every placed mark for this board">reset</button></div>
+        <div class="build-progress" id="bprog"></div><div class="build-bar"><i id="bbar"></i></div>
+        <div class="help">Click a row to light up every part in it. &uarr; &darr; move, Space marks placed, Enter marks placed and moves on, Z zooms to the selection. Progress is remembered for this board.</div>
+      </div>
+      <div class="build-list" id="blist"></div>
+    </div></div>`;
+  $("bsort").value = BUILD.sort;
+  const svg = wrap.querySelector("#bboard svg"), board = $("bboard"), tip = $("btip");
+  BUILD.pz = attachPanZoom(svg, bd.vb);
+  buildRenderList(); buildHighlight(); buildProgress();
+  const selRow = $("blist").querySelector(".brow.sel"); if(selRow) selRow.scrollIntoView({block:"nearest"});
+  /* board interactions */
+  svg.addEventListener("click", e=>{ if(BUILD.pz.wasDrag()) return; const g = e.target.closest && e.target.closest(".part"); if(!g) return;
+    const key = BUILD.refKey[g.dataset.part]; if(key) buildSelect(key); });
+  svg.addEventListener("pointermove", e=>{ const g = e.target.closest && e.target.closest(".part");
+    if(g!==BUILD.hoverEl){ if(BUILD.hoverEl) BUILD.hoverEl.classList.remove("hover"); BUILD.hoverEl = g; if(g) g.classList.add("hover"); }
+    if(g){ const pt = model.parts.find(p=>p.ref===g.dataset.part); const r = board.getBoundingClientRect();
+      tip.innerHTML = pt ? `<b>${esc(pt.ref)}</b> ${esc(pt.value||"")} <span style="color:var(--muted)">${esc(pt.pkg||"")}</span>${pt.dnp?' <span class="btag warn">DNP</span>':""}` : esc(g.dataset.part);
+      tip.hidden = false; let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
+      if(x + tip.offsetWidth > r.width - 8) x = e.clientX - r.left - tip.offsetWidth - 10; if(y + tip.offsetHeight > r.height - 8) y = e.clientY - r.top - tip.offsetHeight - 10;
+      tip.style.left = x+"px"; tip.style.top = y+"px"; } else tip.hidden = true; });
+  svg.addEventListener("pointerleave", ()=>{ tip.hidden = true; if(BUILD.hoverEl){ BUILD.hoverEl.classList.remove("hover"); BUILD.hoverEl = null; } });
+  $("bside").addEventListener("click", e=>{ const b = e.target.closest("button[data-side]"); if(!b || b.disabled || b.dataset.side===BUILD.side) return; BUILD.side = b.dataset.side; buildSave(); showBuild(); });
+  board.querySelectorAll("[data-bz]").forEach(b=> b.addEventListener("click", ()=>{ if(b.dataset.bz==="fit") BUILD.pz.fit(); else buildZoomSel(); }));
+  $("blabels").addEventListener("change", e=>{ BUILD.labels = e.target.checked; svg.classList.toggle("nolabels", !BUILD.labels); buildSave(); e.target.blur(); });
+  /* panel interactions */
+  $("bsearch").addEventListener("input", e=>{ BUILD.q = e.target.value; BUILD.sel = null; buildRenderList(); buildHighlight(); });
+  $("bsearch").addEventListener("keydown", e=>{ if(e.key==="Escape"){ e.target.value = ""; BUILD.q = ""; buildRenderList(); buildHighlight(); e.target.blur(); }
+    else if(e.key==="ArrowDown"||e.key==="Enter"){ e.preventDefault(); e.target.blur(); buildStep(1); } });
+  $("bsort").addEventListener("change", e=>{ BUILD.sort = e.target.value; buildSave(); showBuild(); });
+  $("breset").addEventListener("click", ()=>{ if(!Object.keys(BUILD.placed).length || confirm("Clear every placed mark for this board?")){ BUILD.placed = {}; buildSave(); showBuild(); } });
+  $("blist").addEventListener("click", e=>{ const row = e.target.closest(".brow"); if(!row) return;
+    if(e.target.tagName==="INPUT"){ buildSetPlaced(row.dataset.key, e.target.checked); e.target.blur(); return; }
+    buildSelect(row.dataset.key); });
+  $("blist").addEventListener("dblclick", e=>{ const row = e.target.closest(".brow"); if(row && e.target.tagName!=="INPUT"){ buildSelect(row.dataset.key); buildZoomSel(); } });
+}
+/* keyboard stepping while the build screen is up (ignored while typing in a field) */
+document.addEventListener("keydown", e=>{
+  if(cur.doc!=="build" || !model || !$("blist")) return;
+  const t = e.target, typing = t && ((t.tagName==="INPUT" && !/^(checkbox|radio|button|range)$/i.test(t.type||"")) || t.tagName==="TEXTAREA" || t.tagName==="SELECT" || t.isContentEditable);
+  if(typing) return;
+  if(t && t.tagName==="INPUT" && e.key===" ") return;                 /* a focused checkbox keeps its native Space toggle */
+  if(e.key==="ArrowDown"){ e.preventDefault(); buildStep(1); }
+  else if(e.key==="ArrowUp"){ e.preventDefault(); buildStep(-1); }
+  else if(e.key===" " && BUILD.sel){ e.preventDefault(); buildSetPlaced(BUILD.sel, !BUILD.placed[BUILD.sel]); }
+  else if(e.key==="Enter" && BUILD.sel){ e.preventDefault(); buildSetPlaced(BUILD.sel, true); buildStep(1); }
+  else if((e.key==="z"||e.key==="Z") && !e.metaKey && !e.ctrlKey){ e.preventDefault(); buildZoomSel(); }
+  else if(e.key==="/" ){ e.preventDefault(); const s = $("bsearch"); if(s){ s.focus(); s.select(); } }
+});
 
 /* ---------- display ---------- */
 function showSheet(){
+  document.body.classList.toggle("buildmode", cur.doc==="build");
+  if(noteMode) setNoteMode(false);                                 /* an armed note mode never carries across documents */
+  if(cur.doc==="build"){ showBuild(); return; }
   const list = docs[cur.doc]; if(!list||!list.length){ return; }
   closeNoteEditor();
   const sheet = list[cur.idx];
   const keepPan = pan && pan.key===cur.doc+cur.idx;
   wrap.innerHTML = `<div class="credit">&copy; 2026 <a href="https://www.kdcircuits.com" target="_blank" rel="noopener">KD Circuits LLC</a> &middot; <a href="https://github.com/krdarrah/Fusion_Drawing_Generator" target="_blank" rel="noopener">source on GitHub</a> (MIT) &middot; suggestions? <a href="https://www.kdcircuits.com/#contact" target="_blank" rel="noopener">contact KD Circuits</a></div><div class="sheetbox" style="aspect-ratio:${sheet.w}/${sheet.h};width:100%;background:${TH.paper};">${sheet.svg}
       <div class="zoombar"><button data-zoom="in" title="Zoom in">+</button><button data-zoom="out" title="Zoom out">&minus;</button><button data-zoom="fit">fit</button></div>
-      <div class="tip">scroll to zoom &middot; drag to pan &middot; drag a designator, callout or note to move it &middot; drag a note's ring to move the spot it points at &middot; double-click to snap back / edit</div></div>`;
+      <div class="tip">scroll to zoom &middot; drag to pan &middot; drag a designator, callout or note to move it &middot; double-click a designator to turn it, Alt+double-click to snap back &middot; double-click a note to edit it &middot; drag a note's ring to move its spot</div></div>`;
   const svg = wrap.querySelector("svg");
   svg.removeAttribute("width"); svg.removeAttribute("height");
   if(!keepPan) pan = {key:cur.doc+cur.idx, x:0, y:0, w:sheet.w, h:sheet.h};
@@ -4406,14 +4851,15 @@ function showSheet(){
   const toUnits = (dxPx, dyPx)=>{ const m = ctm(); return m ? [dxPx/m.a, dyPx/m.d] : [0,0]; };  /* screen px delta -> sheet mm */
   svg.addEventListener("pointerdown", e=>{
     const lab = e.target.closest && e.target.closest("[data-drag]");
-    if(lab){ ldrag={el:lab, x:e.clientX, y:e.clientY, moved:false}; svg.setPointerCapture(e.pointerId); e.preventDefault(); return; }
-    drag={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y}; svg.setPointerCapture(e.pointerId); svg.classList.add("drag"); });
+    if(lab){ ldrag={el:lab, x:e.clientX, y:e.clientY, moved:false, id:e.pointerId}; e.preventDefault(); return; }
+    drag={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y,id:e.pointerId,moved:false}; });
   svg.addEventListener("pointermove", e=>{
     if(ldrag){ const [dx,dy]=toUnits(e.clientX-ldrag.x, e.clientY-ldrag.y); const sc=+ldrag.el.dataset.s||1;
-      if(Math.abs(e.clientX-ldrag.x)+Math.abs(e.clientY-ldrag.y)>2) ldrag.moved=true;
+      if(!ldrag.moved && Math.abs(e.clientX-ldrag.x)+Math.abs(e.clientY-ldrag.y)>2){ ldrag.moved=true; try{ svg.setPointerCapture(ldrag.id); }catch(err){} }   /* capture only once it is a drag: double-clicks keep their target */
       ldrag.el.setAttribute("transform", `translate(${(dx/sc).toFixed(4)} ${(dy/sc).toFixed(4)})`); return; }
     if(!drag) return; const [ux,uy] = toUnits(e.clientX-drag.x, e.clientY-drag.y);
-    pan.x = drag.px - ux; pan.y = drag.py - uy; apply(); });
+    if(!drag.moved && Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>2){ drag.moved=true; svg.classList.add("drag"); try{ svg.setPointerCapture(drag.id); }catch(err){} }
+    if(drag.moved){ pan.x = drag.px - ux; pan.y = drag.py - uy; apply(); } });
   const up=e=>{
     if(ldrag){ const el=ldrag.el, d=el.dataset; const [dx,dy]=toUnits(e.clientX-ldrag.x, e.clientY-ldrag.y); const sc=+d.s||1;
       if(ldrag.moved){
@@ -4427,7 +4873,8 @@ function showSheet(){
           }
         }
         else if(d.drag.indexOf("note|")===0){ const a=(cfg.annotations||[]).find(x=>String(x.id)===d.drag.slice(5)); if(a){ a.dx=off.dx; a.dy=off.dy; } }
-        else { cfg.overrides = cfg.overrides||{}; cfg.overrides[d.drag] = off; }
+        else { cfg.overrides = cfg.overrides||{}; const prev = cfg.overrides[d.drag]||{};
+          cfg.overrides[d.drag] = d.drag.indexOf("ref|")===0 ? Object.assign({}, prev, off, {rot: prev.rot!=null ? prev.rot : +d.rot, fs: +d.f}) : off; }
         save(); renderOverrideNote(); rebuild(); showSheet(); }
       else el.removeAttribute("transform");
       ldrag=null; return; }
@@ -4439,7 +4886,12 @@ function showSheet(){
       openNoteEditor(e.clientX, e.clientY, a.text, {onSave: v=>{ a.text = v; noteChanged(); }, onDelete: ()=>{ cfg.annotations = cfg.annotations.filter(x=>x!==a); noteChanged(); }});
       return;
     }
-    if(!cfg.overrides) return; delete cfg.overrides[lab.dataset.drag];
+    cfg.overrides = cfg.overrides||{};
+    const dkey = lab.dataset.drag;
+    if(dkey.indexOf("ref|")===0 && !e.altKey){                       /* double-click turns a designator; Alt+double-click snaps it back */
+      const prev = cfg.overrides[dkey]||{}, cur = +lab.dataset.rot||0;
+      cfg.overrides[dkey] = Object.assign({}, prev, {rot: cur===90 ? 0 : 90});
+    } else delete cfg.overrides[dkey];
     save(); renderOverrideNote(); rebuild(); showSheet(); });
   /* note mode: click a spot on a view, type the note */
   svg.addEventListener("click", e=>{
@@ -4462,8 +4914,8 @@ function showSheet(){
 }
 $("docseg").addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b) return; cur.doc=b.dataset.doc; cur.idx=0;
   $("docseg").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", String(x===b))); if(model) showSheet(); });
-$("pg-prev").addEventListener("click", ()=>{ if(cur.idx>0){ cur.idx--; showSheet(); } });
-$("pg-next").addEventListener("click", ()=>{ if(cur.idx<docs[cur.doc].length-1){ cur.idx++; showSheet(); } });
+$("pg-prev").addEventListener("click", ()=>{ const list=docs[cur.doc]; if(list && cur.idx>0){ cur.idx--; showSheet(); } });
+$("pg-next").addEventListener("click", ()=>{ const list=docs[cur.doc]; if(list && cur.idx<list.length-1){ cur.idx++; showSheet(); } });
 
 /* ---------- stats & checks ---------- */
 function renderStats(){
@@ -4551,14 +5003,15 @@ function loadText(text, fileName){
     console.error(err);
   }
 }
-function handleFile(file){ if(!file) return; const fr=new FileReader(); fr.onload=()=>loadText(fr.result, file.name); fr.readAsText(file); }
+function handleFile(file){ if(!file) return; if(/\.json$|\.pcbdg$/i.test(file.name)){ handleSettingsFile(file); return; }
+  const fr=new FileReader(); fr.onload=()=>loadText(fr.result, file.name); fr.readAsText(file); }
 $("dropzone").addEventListener("click", ()=>$("fileinput").click());
 $("dropzone").addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); $("fileinput").click(); } });
 $("fileinput").addEventListener("change", e=>handleFile(e.target.files[0]));
 ["dragenter","dragover"].forEach(ev=>document.addEventListener(ev, e=>{ e.preventDefault(); $("dropzone").classList.add("over"); }));
 ["dragleave","drop"].forEach(ev=>document.addEventListener(ev, e=>{ e.preventDefault(); $("dropzone").classList.remove("over"); }));
 document.addEventListener("drop", e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(!f) return;
-  if(/\.json$/i.test(f.name)) handleSettingsFile(f); else if(/\.brd$|\.xml$/i.test(f.name)) handleFile(f); });
+  if(/\.json$|\.pcbdg$/i.test(f.name)) handleSettingsFile(f); else if(/\.brd$|\.xml$/i.test(f.name)) handleFile(f); });
 
 /* ---------- export ---------- */
 function download(name, blob){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500); }
@@ -4590,7 +5043,7 @@ $("btn-note").addEventListener("click", ()=>{ if(model) setNoteMode(!noteMode); 
 $("btn-note2").addEventListener("click", ()=>{ if(model) setNoteMode(!noteMode); });
 renderNotesList();
 function renderOverrideNote(){ const n = Object.keys(cfg.overrides||{}).length, a=(cfg.annotations||[]).length; const el=$("overridenote");
-  if(el) el.textContent = (n ? `${n} label${n>1?"s":""} moved by hand. ` : "") + (a ? `${a} note${a>1?"s":""} added. ` : "") + (n||a ? "Saved with this board's settings; double-click a label to snap back. Notes are edited in the Drawing notes panel or by double-clicking them." : "Drag a designator or callout to place it yourself; use + Add note to pin text to a spot.");
+  if(el) el.textContent = (n ? `${n} label${n>1?"s":""} moved by hand. ` : "") + (a ? `${a} note${a>1?"s":""} added. ` : "") + (n||a ? "Saved with this board's settings; double-click a designator to turn it, Alt+double-click to snap it back. Notes are edited in the Drawing notes panel or by double-clicking them." : "Drag a designator or callout to place it yourself, double-click a designator to turn it; use + Add note to pin text to a spot.");
   renderNotesList(); }
 $("btn-resetOverrides").addEventListener("click", ()=>{ cfg.overrides = {}; save(); renderOverrideNote(); if(model){ rebuild(); showSheet(); } });
 $("btn-resetNotes").addEventListener("click", ()=>{ if(!(cfg.annotations||[]).length || confirm("Remove all notes added to this board's drawings?")){ cfg.annotations = []; save(); renderOverrideNote(); if(model){ rebuild(); showSheet(); } } });
@@ -4598,12 +5051,13 @@ document.addEventListener("keydown", e=>{ if(e.key==="Escape" && noteMode) setNo
 $("btn-fabNotesReset").addEventListener("click", ()=>{ cfg.fab.notes=""; $("f-notes").value=""; onChange("fab.notes"); });
 $("btn-asmNotesReset").addEventListener("click", ()=>{ cfg.asm.notes=DEFAULT_ASM_NOTES; $("a-notes").value=DEFAULT_ASM_NOTES; onChange("asm.notes"); });
 document.addEventListener("keydown", e=>{ if(e.target.matches("input,textarea,select")) return;
+  if(cur.doc==="build" || !docs[cur.doc]) return;
   if(e.key==="ArrowLeft") $("pg-prev").click(); if(e.key==="ArrowRight") $("pg-next").click(); });
 
 /* ---------- init ---------- */
 bindAll(); syncForm(); renderStackEditor(); renderAutoNotes();
 $("toolver").textContent = "v"+TOOL_VERSION; document.title = `PCB Drawing Generator v${TOOL_VERSION}`;
-window.__pcbdg = { loadText, cfg, model:()=>model, docs:()=>docs, derive:()=>derive() };
+window.__pcbdg = { loadText, cfg, model:()=>model, docs:()=>docs, derive:()=>derive(), projectSnapshot, applyProject, buildPdf };
 /* built-in demo board on first open */
 let demoPending = false;
 async function loadDemoBoard(){
@@ -4615,7 +5069,14 @@ async function loadDemoBoard(){
   }catch(e){ console.warn("demo board unavailable", e); }
 }
 $("btn-demo").addEventListener("click", loadDemoBoard);
-if(location.hash.indexOf("#load=")!==0) loadDemoBoard();
+if(location.hash.indexOf("#load=")!==0 && location.hash.indexOf("#project=")!==0) loadDemoBoard();
+/* deep link: #project=<url of a .pcbdg>&doc=build */
+if(location.hash.indexOf("#project=")===0){
+  const q = {}; location.hash.slice(1).split("&").forEach(kv=>{ const i=kv.indexOf("="); q[kv.slice(0,i)] = decodeURIComponent(kv.slice(i+1)); });
+  fetch(q.project).then(r=>r.json()).then(obj=>applyProject(obj, q.project.split("/").pop())).then(()=>{
+    if(q.doc){ cur.doc=q.doc; cur.idx=0; $("docseg").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", String(x.dataset.doc===q.doc))); if(model) showSheet(); }
+  }).catch(e=>{ console.error("project load failed", e); $("settingsnote").innerHTML = `<span class="warn">Couldn't load the project link: ${esc(e.message)}</span>`; });
+}
 /* deep links: #load=<url of a .brd>&settings=<url of a .json>&doc=asm&sheet=2&cfg.<path>=<value> */
 if(location.hash.indexOf("#load=")===0){
   const q = {}; location.hash.slice(1).split("&").forEach(kv=>{ const i=kv.indexOf("="); q[kv.slice(0,i)] = decodeURIComponent(kv.slice(i+1)); });
@@ -4628,7 +5089,7 @@ if(location.hash.indexOf("#load=")===0){
   getSettings().then(()=>fetch(q.load)).then(r=>r.text()).then(t=>{ loadText(t, q.load.split("/").pop()); return getSettings(); }).then(()=>{
     const changed = applyOver();
     if(q.doc){ cur.doc=q.doc; $("docseg").querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", String(x.dataset.doc===q.doc))); }
-    if(q.sheet) cur.idx = Math.max(0, Math.min(docs[cur.doc].length-1, (+q.sheet||1)-1));
+    if(q.sheet && docs[cur.doc]) cur.idx = Math.max(0, Math.min(docs[cur.doc].length-1, (+q.sheet||1)-1));
     if(changed||q.doc||q.sheet) showSheet();
   }).catch(e=>console.error("autoload failed", e));
 }
