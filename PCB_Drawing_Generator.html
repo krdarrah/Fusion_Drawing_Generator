@@ -1,10 +1,11 @@
 <!doctype html>
 <!--
   PCB Drawing Generator — single-file fab / assembly drawing generator for EAGLE / Fusion 360 .brd files
-  Version 1.3.1 (2026-09-03)
+  Version 1.3.2 (2026-09-04)
   Built by KD Circuits LLC — https://www.kdcircuits.com
 
   Changelog
+  1.3.2  "KD Circuits" drawing style using the kdcircuits.com palette (green-black paper, mint accent, amber milling).
   1.3.1  "Tactical" style replaces Tactile: khaki paper, olive-drab ink and pads, rust milling, stencil-style
          uppercase monospace captions (Courier in the PDF).
   1.3.0  Drawing styles (Classic, Blueprint, Colorful, Tactile, Dark) and realistic board colors driven by the
@@ -446,7 +447,7 @@ button.link:hover{color:var(--accent)}
       <span class="sheetname" id="sheetname"></span>
       <div class="spacer"></div>
       <label class="field" style="flex-direction:row;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace">Style
-        <select id="s-style" class="txt" style="width:auto;padding:4px 8px"><option value="classic">Classic</option><option value="blueprint">Blueprint</option><option value="colorful">Colorful</option><option value="tactical">Tactical</option><option value="dark">Dark</option></select>
+        <select id="s-style" class="txt" style="width:auto;padding:4px 8px"><option value="classic">Classic</option><option value="blueprint">Blueprint</option><option value="colorful">Colorful</option><option value="tactical">Tactical</option><option value="kd">KD Circuits</option><option value="dark">Dark</option></select>
       </label>
       <button class="btn" id="btn-note" title="Click a spot on a view and type a note; it gets a leader to that spot">+ Add note</button>
       <span class="help" id="notehint"></span>
@@ -1083,7 +1084,7 @@ window.DEMO_BRD_GZ = "H4sIAHfhmWoC/+y93XYcOZbvd19PkZaXZ/Wc0xHCZ3x0d/UxRX20ukRJh2
 "use strict";
 
 /* ================================================================== constants */
-const TOOL_VERSION = "1.3.1";
+const TOOL_VERSION = "1.3.2";
 const DEG = Math.PI/180;
 const MIRROR = {1:16,16:1,21:22,22:21,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31,
                 33:34,34:33,35:36,36:35,37:38,38:37,39:40,40:39,41:42,42:41,51:52,52:51};
@@ -1612,6 +1613,9 @@ const THEMES = {
   tactical: {label:"Tactical",  paper:"#d6cfae", ink:"#1e2414", inkSoft:"#2f3a1f", muted:"#5b6340", tableTitle:"#c3bc98", tableLabel:"#cbc49f", core:"#4b5320", prepreg:"#8a8f5f",
              boardFill:"#b9b58e", pad:"#3b4422", padLine:"#1e2414", padSilk:"#6c7448", padAsm:"#8b9160", body:"#4f5733", place:"#2f3a1f", silkRef:"#5b6340", via:"#3b4422", trace:"#6c7448", mill:"#7a2e1f", dnp:"#a8a37e", hardware:"#5b6340", backing:"#d6cfae", dim:"#1e2414",
              captionFont:"IBM Plex Mono, Courier New, Courier, monospace", captionItalic:false, captionUpper:true, captionSpacing:0.08},
+  kd:       {label:"KD Circuits", paper:"#0a0e0c", ink:"#e8ece9", inkSoft:"#c3cbc6", muted:"#9aa39d", tableTitle:"#101512", tableLabel:"#12291d", core:"#23302a", prepreg:"#2c3a32",
+             boardFill:"#101512", pad:"#52e09a", padLine:"#7ceab2", padSilk:"#2f8f62", padAsm:"#1e5c3f", body:"#6d7a72", place:"#9aa39d", silkRef:"#6d7a72", via:"#7ceab2", trace:"#2f8f62", mill:"#d9a24a", dnp:"#3c4a42", hardware:"#6d7a72", backing:"#0a0e0c", dim:"#52e09a",
+             captionFont:"Archivo, Helvetica Neue, Helvetica, Arial, sans-serif", captionItalic:false, captionUpper:true, captionSpacing:0.06},
   dark:     {label:"Dark",      paper:"#14171a", ink:"#e8ecef", inkSoft:"#c8ced3", muted:"#8d979e", tableTitle:"#1f2529", tableLabel:"#22303a", core:"#3a4147", prepreg:"#5a646b",
              boardFill:"#1c2126", pad:"#9aa4ad", padLine:"#d0d7dd", padSilk:"#6e7a84", padAsm:"#4f5a63", body:"#7b868f", place:"#b3bcc3", silkRef:"#8d979e", via:"#a9b3bb", trace:"#6f7a83", mill:"#c9a24a", dnp:"#4a545c", hardware:"#8d979e", backing:"#14171a", dim:"#e8ecef"}
 };
