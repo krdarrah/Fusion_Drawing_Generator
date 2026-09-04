@@ -1,10 +1,12 @@
 <!doctype html>
 <!--
   PCB Drawing Generator — single-file fab / assembly drawing generator for EAGLE / Fusion 360 .brd files
-  Version 1.2.1 (2026-09-03)
+  Version 1.3.0 (2026-09-03)
   Built by KD Circuits LLC — https://www.kdcircuits.com
 
   Changelog
+  1.3.0  Drawing styles (Classic, Blueprint, Colorful, Tactile, Dark) and realistic board colors driven by the
+         ordered mask, surface finish, silkscreen and via process.
   1.2.1  Links to the GitHub source and to KD Circuits contact (header and footer).
   1.2.0  Simplified exports: one PDF (fab + assembly, parts list included) and settings save/load. SVG, PNG, CSV,
          Fabmaster and browser-print exports removed along with their modules.
@@ -208,6 +210,7 @@ button.link:hover{color:var(--accent)}
         </label>
         <div class="help">Both are true views from the bottom; they differ by a 180° turn. Auto picks the one where the board's own fixed-orientation bottom text reads upright, and the caption states which was used.</div>
         <label class="row"><input type="checkbox" id="s-zones" checked> Zone grid on the border</label>
+        <label class="row"><input type="checkbox" id="s-realistic"> Realistic board colors (mask, finish, silkscreen from the PCB spec)</label>
         <div class="btnrow" style="align-items:center"><span class="help" id="overridenote" style="flex:1">No labels moved by hand.</span><button class="btn" id="btn-resetOverrides">Reset moved labels</button><button class="btn" id="btn-resetNotes">Remove notes</button></div>
         <div class="slider"><span>Text size</span><input type="range" id="s-textScale" min="70" max="160" value="100"><b id="s-textScaleV">100%</b></div>
         <div class="help">Scales notes, tables, captions, dimensions and callouts on the sheets. Designator size has its own slider below. Saved with the settings.</div>
@@ -440,6 +443,9 @@ button.link:hover{color:var(--accent)}
       </div>
       <span class="sheetname" id="sheetname"></span>
       <div class="spacer"></div>
+      <label class="field" style="flex-direction:row;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace">Style
+        <select id="s-style" class="txt" style="width:auto;padding:4px 8px"><option value="classic">Classic</option><option value="blueprint">Blueprint</option><option value="colorful">Colorful</option><option value="tactile">Tactile</option><option value="dark">Dark</option></select>
+      </label>
       <button class="btn" id="btn-note" title="Click a spot on a view and type a note; it gets a leader to that spot">+ Add note</button>
       <span class="help" id="notehint"></span>
       <button class="btn primary" id="btn-printall">Download PDF</button>
@@ -1075,7 +1081,7 @@ window.DEMO_BRD_GZ = "H4sIAHfhmWoC/+y93XYcOZbvd19PkZaXZ/Wc0xHCZ3x0d/UxRX20ukRJh2
 "use strict";
 
 /* ================================================================== constants */
-const TOOL_VERSION = "1.2.1";
+const TOOL_VERSION = "1.3.0";
 const DEG = Math.PI/180;
 const MIRROR = {1:16,16:1,21:22,22:21,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31,
                 33:34,34:33,35:36,36:35,37:38,38:37,39:40,40:39,41:42,42:41,51:52,52:51};
@@ -1561,7 +1567,7 @@ function parseBoard(xmlText, fileName){
 
 /* classic drill-legend symbols: the first four match drill_legend_board.ulp, the rest keep sizes distinct */
 function drillSymbolSvg(i, cx, cy, r, sw, color){
-  const N = v => (+v).toFixed(4), c = color||"#000";
+  const N = v => (+v).toFixed(4), c = color||TH.ink;
   const S = `fill="none" stroke="${c}" stroke-width="${N(sw)}" stroke-linejoin="round"`;
   const d = r*0.707;
   const circle = `<circle cx="${N(cx)}" cy="${N(cy)}" r="${N(r)}" ${S}/>`;
@@ -1593,7 +1599,43 @@ function drillSymbolSvg(i, cx, cy, r, sw, color){
    Produces SVG in "view units" (board mm, y down, x mirrored for bottom views).
    The sheet composer wraps it in translate()/scale(). Widths that must stay
    constant on paper are passed in as paperMM/scale by the caller (hair). */
-const INK="#000", PADFILL="#7a7a7a", PADLINE="#3a3a3a", BODY="#8c8c8c", LIGHTPAD="#c8c8c8", VIA="#555";
+/* ---------- drawing styles ---------- */
+const THEMES = {
+  classic:  {label:"Classic",   paper:"#ffffff", ink:"#000000", inkSoft:"#222222", muted:"#777777", tableTitle:"#f1f1f1", tableLabel:"#e4ecf3", core:"#6f6f6f", prepreg:"#cfcfcf",
+             boardFill:"#ffffff", pad:"#7a7a7a", padLine:"#3a3a3a", padSilk:"#b0b0b0", padAsm:"#c8c8c8", body:"#8c8c8c", place:"#5a5a5a", silkRef:"#9b9b9b", via:"#555555", trace:"#9a9a9a", mill:"#555555", dnp:"#c0c0c0", hardware:"#6a6a6a", backing:"#ffffff", dim:"#000000"},
+  blueprint:{label:"Blueprint", paper:"#173e8c", ink:"#ffffff", inkSoft:"#e6ecff", muted:"#b9c6ea", tableTitle:"#1f4aa3", tableLabel:"#1c4599", core:"#0e2a63", prepreg:"#2a5ab8",
+             boardFill:"#1b47a0", pad:"#cfe0ff", padLine:"#ffffff", padSilk:"#9fbaf0", padAsm:"#7fa1e6", body:"#bcd0ff", place:"#e6ecff", silkRef:"#a9c1f5", via:"#dbe6ff", trace:"#8fb0f0", mill:"#dbe6ff", dnp:"#5f7fc4", hardware:"#bcd0ff", backing:"#173e8c", dim:"#ffffff"},
+  colorful: {label:"Colorful",  paper:"#ffffff", ink:"#1a1a1a", inkSoft:"#333333", muted:"#666666", tableTitle:"#e8f1ff", tableLabel:"#fff3cd", core:"#8a6d3b", prepreg:"#e0c98f",
+             boardFill:"#eaf4ea", pad:"#c98f3d", padLine:"#8a5a1a", padSilk:"#e2b878", padAsm:"#e7c9a0", body:"#3a7bd5", place:"#1f5fb0", silkRef:"#5c8fd6", via:"#b35c1e", trace:"#d8a35c", mill:"#c0392b", dnp:"#bbbbbb", hardware:"#7a7a7a", backing:"#ffffff", dim:"#c0392b"},
+  tactile:  {label:"Tactile",   paper:"#f6f1e7", ink:"#2b2622", inkSoft:"#4a423b", muted:"#8a7f73", tableTitle:"#ebe3d4", tableLabel:"#efe7d8", core:"#8b7b68", prepreg:"#d9cdb8",
+             boardFill:"#e9e2d3", pad:"#5b6b7a", padLine:"#2f3a44", padSilk:"#9fa9b3", padAsm:"#b7c0c8", body:"#7d8790", place:"#4f5860", silkRef:"#8d9aa5", via:"#6b7580", trace:"#98a2ab", mill:"#7a5c3a", dnp:"#c9c1b5", hardware:"#7d7368", backing:"#f6f1e7", dim:"#2b2622"},
+  dark:     {label:"Dark",      paper:"#14171a", ink:"#e8ecef", inkSoft:"#c8ced3", muted:"#8d979e", tableTitle:"#1f2529", tableLabel:"#22303a", core:"#3a4147", prepreg:"#5a646b",
+             boardFill:"#1c2126", pad:"#9aa4ad", padLine:"#d0d7dd", padSilk:"#6e7a84", padAsm:"#4f5a63", body:"#7b868f", place:"#b3bcc3", silkRef:"#8d979e", via:"#a9b3bb", trace:"#6f7a83", mill:"#c9a24a", dnp:"#4a545c", hardware:"#8d979e", backing:"#14171a", dim:"#e8ecef"}
+};
+let TH = THEMES.classic, REAL = null;
+let INK, PADFILL, PADLINE, BODY, LIGHTPAD, VIA;
+function applyTheme(style, realistic, spec){
+  TH = THEMES[style] || THEMES.classic;
+  REAL = realistic ? realisticPalette(spec) : null;
+  INK = TH.ink; PADFILL = TH.pad; PADLINE = TH.padLine; BODY = TH.body; LIGHTPAD = TH.padAsm; VIA = TH.via;
+}
+/* board colours from the ordered PCB spec: mask, finish, silk, via treatment */
+function shade(hex, f){ const n=parseInt(hex.slice(1),16); let r=n>>16, g=(n>>8)&255, b=n&255;
+  const t = f<0 ? 0 : 255, a=Math.abs(f); r=Math.round(r+(t-r)*a); g=Math.round(g+(t-g)*a); b=Math.round(b+(t-b)*a);
+  return "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join(""); }
+function realisticPalette(spec){
+  const masks = {"Green":"#0f6b3a","Matte green":"#1d5d3a","Red":"#a2201a","Yellow":"#d6b21e","Blue":"#1e3f8a","White":"#e9e9e6","Black":"#1a1a1a","Matte black":"#2b2b2b","Purple":"#4b2a7a","None":"#b87333"};
+  const f = spec.finish||"";
+  const finish = /ENIG|gold|ENEPIG/i.test(f) ? "#d4af37" : /HASL/i.test(f) ? "#c9ccd1" : /silver/i.test(f) ? "#d5d7d9" : /tin/i.test(f) ? "#b7bcc0" : /OSP|copper|None/i.test(f) ? "#b87333" : "#c9ccd1";
+  const mask = masks[spec.mask] || "#0f6b3a";
+  const light = /White|Yellow/.test(spec.mask||"");
+  const silks = {"White":"#ffffff","Black":"#111111","Yellow":"#f2d33a"};
+  const silk = silks[spec.silk] || (light ? "#222222" : "#ffffff");
+  return { mask, finish, silk, light,
+           via: spec.via==="Vias not covered" ? finish : shade(mask, -0.18),
+           trace: spec.mask==="None" ? finish : shade(mask, 0.16),
+           body: light ? "#333333" : "#dddddd", text: light ? "#111111" : "#ffffff" };
+}
 
 function renderBoardView(model, o){
   /* o: {side:"top"|"bottom", mirror:bool, mode:"fab"|"silk"|"asm", scale, hair, opts:{...}} */
@@ -1672,12 +1714,12 @@ function renderBoardView(model, o){
   /* ---- board fill + outline ---- */
   if(model.hasOutline && model.closed.length){
     const d = model.closed.map(l=>polyD(l.pts)+"Z").join(" ");
-    S.push(`<path d="${d}" fill="${mode==="asm"?"#ffffff":"#ffffff"}" fill-rule="evenodd" stroke="none"/>`);
+    S.push(`<path d="${d}" fill="${REAL?REAL.mask:TH.boardFill}" fill-rule="evenodd" stroke="none"/>`);
   }
 
   /* ---- milling view: cutouts and slots shaded, mill paths dashed ---- */
   if(mode==="mill"){
-    const g=[], MILLC="#555";
+    const g=[], MILLC=TH.mill;
     const shade = `fill="${MILLC}" fill-opacity="0.45" stroke="${INK}" stroke-width="${N(hair*0.6)}" stroke-linejoin="round"`;
     model.cutoutLoops.forEach(l=> g.push(`<path d="${polyD(l.pts)}Z" ${shade}/>`));
     model.outlineCircles.forEach(c=>{ const q=p(c.c[0],c.c[1]); g.push(`<circle cx="${N(q[0])}" cy="${N(q[1])}" r="${N(c.r)}" ${shade}/>`); });
@@ -1702,28 +1744,28 @@ function renderBoardView(model, o){
   /* ---- copper pads / vias / traces ---- */
   if(mode==="fab" || mode==="silk"){
     if(opts.traces && mode==="fab"){
-      const tr = model.traces.filter(t=>t.layer===cuL).map(t=>`<path d="${polyD(t.pts)}" stroke="#9a9a9a" stroke-width="${N(t.w)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`).join("");
+      const tr = model.traces.filter(t=>t.layer===cuL).map(t=>`<path d="${polyD(t.pts)}" stroke="${REAL?REAL.trace:TH.trace}" stroke-width="${N(t.w)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`).join("");
       if(tr) S.push(`<g data-g="traces">${tr}</g>`);
     }
     if(opts.pads!==false){
-      const fill = mode==="fab" ? PADFILL : "#b0b0b0";
+      const fill = REAL ? REAL.finish : (mode==="fab" ? PADFILL : TH.padSilk);
       const g=[];
       model.shapes.forEach(sh=>{
         if(sh.kind==="rect" && sh.pad && sh.layer===cuL) g.push(rectSvg(sh, fill, null, 0));
-        else if(sh.kind==="tht") g.push(thtSvg(sh, fill, INK, hair*0.35, "#fff"));
+        else if(sh.kind==="tht") g.push(thtSvg(sh, fill, INK, hair*0.35, TH.paper));
       });
       S.push(`<g data-g="pads">${g.join("")}</g>`);
     }
     if(opts.vias && mode==="fab"){
       const g = model.vias.map(v=>{ const q=p(v.c[0],v.c[1]);
-        return `<circle cx="${N(q[0])}" cy="${N(q[1])}" r="${N((v.r+v.drill)/2)}" fill="none" stroke="${VIA}" stroke-width="${N(Math.max(v.r-v.drill, hair*0.3))}"/>`; }).join("");
+        return `<circle cx="${N(q[0])}" cy="${N(q[1])}" r="${N((v.r+v.drill)/2)}" fill="none" stroke="${REAL?REAL.via:VIA}" stroke-width="${N(Math.max(v.r-v.drill, hair*0.3))}"/>`; }).join("");
       S.push(`<g data-g="vias">${g}</g>`);
     }
   }
 
   /* ---- assembly: silkscreen reference layer (light), then pads + body outlines ---- */
   if(mode==="asm" && opts.silk!==false){
-    const SILK="#9b9b9b", g=[];
+    const SILK=REAL?REAL.silk:TH.silkRef, g=[];
     model.shapes.forEach(sh=>{
       if(silkL.indexOf(sh.layer)<0) return;
       if(sh.kind==="text" && (sh.attr==="NAME"||sh.attr==="VALUE")) return;
@@ -1739,8 +1781,8 @@ function renderBoardView(model, o){
   if(mode==="asm"){
     const g=[];
     model.shapes.forEach(sh=>{
-      if(sh.kind==="rect" && sh.pad && sh.layer===cuL) g.push(rectSvg(sh, LIGHTPAD, null, 0));
-      else if(sh.kind==="tht") g.push(thtSvg(sh, LIGHTPAD, "#8a8a8a", hair*0.3, "#fff"));
+      if(sh.kind==="rect" && sh.pad && sh.layer===cuL) g.push(rectSvg(sh, REAL?REAL.finish:LIGHTPAD, null, 0));
+      else if(sh.kind==="tht") g.push(thtSvg(sh, REAL?REAL.finish:LIGHTPAD, TH.body, hair*0.3, TH.paper));
     });
     S.push(`<g data-g="pads">${g.join("")}</g>`);
     const b=[];
@@ -1748,7 +1790,7 @@ function renderBoardView(model, o){
       if(!sh.ref) return;
       if(sh.layer===docuL && !opts.docu) return;
       if(sh.layer!==docuL && sh.layer!==placeL && sh.layer!==(near==="top"?39:40)) return;
-      const col = dnpOf[sh.ref] ? "#c0c0c0" : (sh.layer===placeL ? "#5a5a5a" : BODY);
+      const col = dnpOf[sh.ref] ? TH.dnp : (sh.layer===placeL ? (REAL?REAL.silk:TH.place) : BODY);
       if(sh.kind==="line") b.push(lineSvg(sh, col, hair*0.5));
       else if(sh.kind==="circle") b.push(circleSvg(sh, col, hair*0.5));
       else if(sh.kind==="rect" && !sh.pad) b.push(rectSvg(sh, "none", col, hair*0.5));
@@ -1759,16 +1801,16 @@ function renderBoardView(model, o){
 
   /* ---- silkscreen ---- */
   if((mode==="fab"||mode==="silk") && opts.silk!==false){
-    const g=[];
+    const g=[], SK = REAL ? REAL.silk : INK;
     model.shapes.forEach(sh=>{
       const onSilk = silkL.indexOf(sh.layer)>=0 || (opts.values && sh.layer===valL);
       if(!onSilk) return;
       if(sh.kind==="text" && sh.attr==="VALUE" && !opts.values) return;
-      if(sh.kind==="line") g.push(lineSvg(sh, INK, hair*0.4));
-      else if(sh.kind==="circle") g.push(circleSvg(sh, INK, hair*0.4));
-      else if(sh.kind==="rect") g.push(rectSvg(sh, INK, null, 0));
-      else if(sh.kind==="poly") g.push(polySvg(sh, INK, true));
-      else if(sh.kind==="text") g.push(textSvg(sh, INK));
+      if(sh.kind==="line") g.push(lineSvg(sh, SK, hair*0.4));
+      else if(sh.kind==="circle") g.push(circleSvg(sh, SK, hair*0.4));
+      else if(sh.kind==="rect") g.push(rectSvg(sh, SK, null, 0));
+      else if(sh.kind==="poly") g.push(polySvg(sh, SK, true));
+      else if(sh.kind==="text") g.push(textSvg(sh, SK));
     });
     S.push(`<g data-g="silk">${g.join("")}</g>`);
   }
@@ -1777,7 +1819,7 @@ function renderBoardView(model, o){
   {
     const g=[];
     model.shapes.forEach(sh=>{ if(sh.kind==="hole"){ const q=p(sh.c[0],sh.c[1]);
-      g.push(`<circle cx="${N(q[0])}" cy="${N(q[1])}" r="${N(sh.drill)}" fill="#fff" stroke="${INK}" stroke-width="${N(hair*0.5)}"/>`); } });
+      g.push(`<circle cx="${N(q[0])}" cy="${N(q[1])}" r="${N(sh.drill)}" fill="${TH.paper}" stroke="${INK}" stroke-width="${N(hair*0.5)}"/>`); } });
     if(mode!=="mill") model.milling.forEach(sh=>{ if(sh.kind==="line") g.push(lineSvg(sh, INK, hair*0.5, ` stroke-dasharray="${N(2*hair)} ${N(1*hair)}"`)); else if(sh.kind==="circle") g.push(circleSvg(sh, INK, hair*0.5)); });
     S.push(`<g data-g="holes">${g.join("")}</g>`);
     const ol = model.outline.map(sh=>lineSvg(sh, INK, hair*0.9)).join("") +
@@ -1803,8 +1845,8 @@ function renderBoardView(model, o){
       return {x1:Math.min(q1[0],q2[0]), y1:Math.min(q1[1],q2[1]), x2:Math.max(q1[0],q2[0]), y2:Math.max(q1[1],q2[1])}; };
     const keyOf = pt => `ref|${near}|${pt.ref}`;
     const emit = (pt, lbl, cx, cy, leader) => {
-      const bw = lbl.length*fs*0.6+fs*0.35, bh = fs*1.02, col = pt.dnp ? "#9a9a9a" : pt.hardware ? "#6a6a6a" : INK;
-      const back = `<rect x="${N(cx-bw/2)}" y="${N(cy-bh/2)}" width="${N(bw)}" height="${N(bh)}" rx="${N(fs*0.12)}" fill="#fff" fill-opacity="0.85"/>`;
+      const bw = lbl.length*fs*0.6+fs*0.35, bh = fs*1.02, col = pt.dnp ? TH.dnp : pt.hardware ? TH.hardware : INK;
+      const back = `<rect x="${N(cx-bw/2)}" y="${N(cy-bh/2)}" width="${N(bw)}" height="${N(bh)}" rx="${N(fs*0.12)}" fill="${TH.backing}" fill-opacity="0.85"/>`;
       const c = p(pt.cx, pt.cy);
       out.set(pt.ref, `<g data-ref="${esc(pt.ref)}"${dragAttrs(keyOf(pt), s, cx, cy, c[0], c[1])}>${leader}${back}<text x="${N(cx)}" y="${N(cy)}" dy="0.35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${N(fs)}" fill="${col}"${pt.dnp?' font-style="italic"':""}>${esc(lbl)}</text></g>`);
     };
@@ -1887,8 +1929,8 @@ function renderBoardView(model, o){
     }
     labels = model.parts.map(pt=>out.get(pt.ref)||"");
     const pins = markGlyphs.map(g=>{
-      if(g.dotOnly) return `<circle cx="${N(g.q[0])}" cy="${N(g.q[1])}" r="${N(g.dotR)}" fill="${INK}" stroke="#fff" stroke-width="${N(g.dotR*0.35)}" paint-order="stroke"/>`;
-      const back = `<rect x="${N(g.tx-g.bw/2)}" y="${N(g.ty-g.bh/2)}" width="${N(g.bw)}" height="${N(g.bh)}" rx="${N(g.mfs*0.12)}" fill="#fff" fill-opacity="0.9"/>`;
+      if(g.dotOnly) return `<circle cx="${N(g.q[0])}" cy="${N(g.q[1])}" r="${N(g.dotR)}" fill="${INK}" stroke="${TH.backing}" stroke-width="${N(g.dotR*0.35)}" paint-order="stroke"/>`;
+      const back = `<rect x="${N(g.tx-g.bw/2)}" y="${N(g.ty-g.bh/2)}" width="${N(g.bw)}" height="${N(g.bh)}" rx="${N(g.mfs*0.12)}" fill="${TH.backing}" fill-opacity="0.9"/>`;
       const txt = `<text x="${N(g.tx)}" y="${N(g.ty)}" dy="0.35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="${N(g.mfs)}" fill="${INK}">${g.kind}</text>`;
       if(g.kind==="K"){
         /* cathode bar across the pad's outer edge */
@@ -1915,18 +1957,18 @@ const twidth = (str, fs) => String(str).length * fs * 0.52;
 const fitText = (str, maxW, fs) => (maxW>0 && twidth(str,fs) > maxW) ? ` textLength="${N4(maxW)}" lengthAdjust="spacingAndGlyphs"` : "";
 function T(x,y,str,fs,o){ o=o||{};
   return `<text x="${N4(x)}" y="${N4(y)}" font-family="${FONT}" font-size="${N4(fs)}"${o.anchor?` text-anchor="${o.anchor}"`:""}`+
-         `${o.bold?' font-weight="bold"':""}${o.italic?' font-style="italic"':""} fill="${o.fill||"#000"}"`+
+         `${o.bold?' font-weight="bold"':""}${o.italic?' font-style="italic"':""} fill="${o.fill||TH.ink}"`+
          `${o.rot?` transform="rotate(${N4(o.rot)} ${N4(x)} ${N4(y)})"`:""}${o.maxW?fitText(str,o.maxW,fs):""}${o.extra||""}>${esc(str)}</text>`; }
 function R(x,y,w,h,o){ o=o||{};
-  return `<rect x="${N4(x)}" y="${N4(y)}" width="${N4(w)}" height="${N4(h)}" fill="${o.fill||"none"}"${o.stroke===null?"":` stroke="${o.stroke||"#000"}" stroke-width="${N4(o.sw||0.25)}"`}/>`; }
+  return `<rect x="${N4(x)}" y="${N4(y)}" width="${N4(w)}" height="${N4(h)}" fill="${o.fill||"none"}"${o.stroke===null?"":` stroke="${o.stroke||TH.ink}" stroke-width="${N4(o.sw||0.25)}"`}/>`; }
 function LN(x1,y1,x2,y2,sw,o){ o=o||{};
-  return `<line x1="${N4(x1)}" y1="${N4(y1)}" x2="${N4(x2)}" y2="${N4(y2)}" stroke="${o.stroke||"#000"}" stroke-width="${N4(sw||0.25)}"${o.dash?` stroke-dasharray="${o.dash}"`:""}/>`; }
+  return `<line x1="${N4(x1)}" y1="${N4(y1)}" x2="${N4(x2)}" y2="${N4(y2)}" stroke="${o.stroke||TH.ink}" stroke-width="${N4(sw||0.25)}"${o.dash?` stroke-dasharray="${o.dash}"`:""}/>`; }
 /* text with a white backing so annotations stay legible over artwork */
 function haloText(x,y,str,fs,o){ o=o||{};
   const tw = twidth(str,fs)*(o.bold?1.08:1)+fs*0.5, th = fs*1.15;
   const bx = o.anchor==="middle" ? x-tw/2 : o.anchor==="end" ? x-tw+fs*0.25 : x-fs*0.25;
   const by = y-fs*0.9;
-  const rect = `<rect x="${N4(bx)}" y="${N4(by)}" width="${N4(tw)}" height="${N4(th)}" rx="${N4(fs*0.15)}" fill="#fff" fill-opacity="0.88"${o.rot?` transform="rotate(${N4(o.rot)} ${N4(x)} ${N4(y)})"`:""}/>`;
+  const rect = `<rect x="${N4(bx)}" y="${N4(by)}" width="${N4(tw)}" height="${N4(th)}" rx="${N4(fs*0.15)}" fill="${TH.backing}" fill-opacity="0.88"${o.rot?` transform="rotate(${N4(o.rot)} ${N4(x)} ${N4(y)})"`:""}/>`;
   return rect + T(x,y,str,fs,o);
 }
 function wrapText(str, maxW, fs){
@@ -1956,8 +1998,8 @@ const TBW = 180, TBH = 46, PNW = 92, PNH = 14, MARGIN = 10;
 function sheetWrap(sh, inner, k){
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${sh.w} ${sh.h}" width="${sh.w}mm" height="${sh.h}mm">`+
     `<defs><pattern id="hatch" width="${N4(1.4*k)}" height="${N4(1.4*k)}" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">`+
-    `<line x1="0" y1="0" x2="0" y2="${N4(1.4*k)}" stroke="#000" stroke-width="${N4(0.4*k)}"/></pattern></defs>`+
-    `<rect width="${sh.w}" height="${sh.h}" fill="#fff"/>${inner}</svg>`;
+    `<line x1="0" y1="0" x2="0" y2="${N4(1.4*k)}" stroke="${TH.ink}" stroke-width="${N4(0.4*k)}"/></pattern></defs>`+
+    `<rect width="${sh.w}" height="${sh.h}" fill="${TH.paper}"/>${inner}</svg>`;
 }
 function frameSvg(sh, zones){
   const W=sh.w,H=sh.h,m=MARGIN,z=5; let g="";
@@ -1975,10 +2017,10 @@ function frameSvg(sh, zones){
 }
 function titleBlockSvg(x,y,u,tb){
   const W=TBW*u,H=TBH*u, X=[0,24,59,119,179].map(v=>x+v*u), Y=[0,10,20,37,46].map(v=>y+v*u);
-  let g = R(x,y,W,H,{fill:"#fff",sw:0.55});
+  let g = R(x,y,W,H,{fill:TH.paper,sw:0.55});
   g += LN(X[0],Y[1],X[4],Y[1],0.3) + LN(X[2],Y[2],X[4],Y[2],0.3) + LN(X[1],Y[0],X[1],Y[1],0.3) + LN(X[2],Y[0],X[2],Y[4],0.3) + LN(X[3],Y[0],X[3],Y[4],0.3) + LN(X[3],Y[3],X[4],Y[3],0.3);
   const rx=[130,165].map(v=>x+v*u); g += LN(rx[0],Y[3],rx[0],Y[4],0.3) + LN(rx[1],Y[3],rx[1],Y[4],0.3);
-  const lab=(cx,cy,s)=>T(cx+1*u, cy+2.3*u, s, 2.0*u, {fill:"#222"});
+  const lab=(cx,cy,s)=>T(cx+1*u, cy+2.3*u, s, 2.0*u, {fill:TH.inkSoft});
   const val=(cx,cy,cw,ch,s,fs)=>T(cx+1*u, cy+ch-1.7*u, s, fs||4.0*u, {maxW:cw-2*u});
   g += lab(X[0],Y[0],"Dept.") + val(X[0],Y[0],24*u,10*u, tb.dept||"");
   g += lab(X[1],Y[0],"Technical reference") + val(X[1],Y[0],35*u,10*u, tb.techRef||"", 3.4*u);
@@ -2002,7 +2044,7 @@ function titleBlockSvg(x,y,u,tb){
   return g;
 }
 function pnBoxSvg(x,y,u,pn,rev){
-  const w=PNW*u, rh=PNH*u/2, cx=x+40*u; let g = R(x,y,w,rh*2,{fill:"#fff",sw:0.45});
+  const w=PNW*u, rh=PNH*u/2, cx=x+40*u; let g = R(x,y,w,rh*2,{fill:TH.paper,sw:0.45});
   g += LN(x,y+rh,x+w,y+rh,0.3) + LN(cx,y,cx,y+2*rh,0.3);
   g += T(cx-1.5*u, y+rh*0.72, "Part Number:", 3.5*u, {anchor:"end", bold:true});
   g += T(cx-1.5*u, y+rh*1.72, "Part Revision:", 3.5*u, {anchor:"end", bold:true});
@@ -2016,12 +2058,12 @@ function tableSvg(x,y,w,spec){
   const xs=[]; let acc=x; spec.cols.forEach(c=>{ xs.push(acc); acc+=c.w*w; }); xs.push(x+w);
   if(spec.title){
     const lines = Array.isArray(spec.title)?spec.title:[spec.title]; const th=rh*lines.length;
-    g += R(x,yy,w,th,{fill:"#f1f1f1",sw:0.3});
+    g += R(x,yy,w,th,{fill:TH.tableTitle,sw:0.3});
     lines.forEach((ln,i)=> g += T(x+w/2, yy+rh*(i+0.68), ln, fs*1.05, {anchor:"middle", bold:true, maxW:w-2*fs}));
     yy += th;
   }
   if(spec.header!==false){
-    g += R(x,yy,w,rh,{fill:"#fff",sw:0.3});
+    g += R(x,yy,w,rh,{fill:TH.paper,sw:0.3});
     spec.cols.forEach((c,i)=>{ if(i>0) g+=LN(xs[i],yy,xs[i],yy+rh,0.3);
       g += T((xs[i]+xs[i+1])/2, yy+rh*0.68, c.label||"", fs, {anchor:"middle", bold:true, maxW:xs[i+1]-xs[i]-fs}); });
     yy += rh;
@@ -2030,7 +2072,7 @@ function tableSvg(x,y,w,spec){
     g += R(x,yy,w,rh,{sw:0.25});
     row.forEach((cell,i)=>{
       const cw=xs[i+1]-xs[i], isLab = spec.labelCols && spec.labelCols.indexOf(i)>=0;
-      if(isLab) g += R(xs[i],yy,cw,rh,{fill:"#e4ecf3",sw:0.25});
+      if(isLab) g += R(xs[i],yy,cw,rh,{fill:TH.tableLabel,sw:0.25});
       if(i>0) g += LN(xs[i],yy,xs[i],yy+rh,0.25);
       if(typeof cell==="function"){ g += cell(xs[i],yy,cw,rh); return; }
       const al = spec.cols[i].align||"center";
@@ -2064,17 +2106,17 @@ function stackDiagramSvg(x,y,w,h,stack,k){
   let g="", yy=y;
   stack.forEach((l,i)=>{
     const hh=hs[i];
-    const fill = l.kind==="copper" ? "url(#hatch)" : l.kind==="core" ? "#6f6f6f" : "#cfcfcf";
+    const fill = l.kind==="copper" ? "url(#hatch)" : l.kind==="core" ? TH.core : TH.prepreg;
     g += R(lx, yy, holeX-lx, hh, {fill, sw:0.2}) + R(rx, yy, rw, hh, {fill, sw:0.2});
     const letter = l.letter || String.fromCharCode(65+i);
     const ty = yy+hh/2;
     g += T(x+1.2*k, ty+1.1*k, letter, 3.2*k, {anchor:"middle"});
-    g += LN(x+3.2*k, ty, lx-0.6*k, ty, 0.25) + `<path d="M${N4(lx)} ${N4(ty)} l${N4(-1.6*k)} ${N4(-0.55*k)} v${N4(1.1*k)} z" fill="#000"/>`;
+    g += LN(x+3.2*k, ty, lx-0.6*k, ty, 0.25) + `<path d="M${N4(lx)} ${N4(ty)} l${N4(-1.6*k)} ${N4(-0.55*k)} v${N4(1.1*k)} z" fill="${TH.ink}"/>`;
     yy += hh;
   });
   /* plated through hole barrel */
-  g += R(holeX, y, holeW, h, {fill:"#fff", stroke:null});
-  g += R(holeX, y, 0.55*k, h, {fill:"#000", stroke:null}) + R(holeX+holeW-0.55*k, y, 0.55*k, h, {fill:"#000", stroke:null});
+  g += R(holeX, y, holeW, h, {fill:TH.paper, stroke:null});
+  g += R(holeX, y, 0.55*k, h, {fill:TH.ink, stroke:null}) + R(holeX+holeW-0.55*k, y, 0.55*k, h, {fill:TH.ink, stroke:null});
   g += LN(holeX+holeW/2, y-1.5*k, holeX+holeW/2, y+h+1.5*k, 0.2, {dash:`${N4(1.2*k)} ${N4(0.8*k)}`});
   return g;
 }
@@ -2111,7 +2153,7 @@ function placeView(model, cell, v){
 
   if(v.dims){
     const off=9*k, ext=2.2*k, ah_=2.6*k, fs=3.6*k, sw=0.28;
-    const arrow=(x,y,dx,dy)=>{ const nx=-dy, ny=dx; return `<path d="M${N4(x)} ${N4(y)} L${N4(x-dx*ah_+nx*ah_*0.32)} ${N4(y-dy*ah_+ny*ah_*0.32)} L${N4(x-dx*ah_-nx*ah_*0.32)} ${N4(y-dy*ah_-ny*ah_*0.32)} Z" fill="#000"/>`; };
+    const arrow=(x,y,dx,dy)=>{ const nx=-dy, ny=dx; return `<path d="M${N4(x)} ${N4(y)} L${N4(x-dx*ah_+nx*ah_*0.32)} ${N4(y-dy*ah_+ny*ah_*0.32)} L${N4(x-dx*ah_-nx*ah_*0.32)} ${N4(y-dy*ah_-ny*ah_*0.32)} Z" fill="${TH.dim}"/>`; };
     const yd = by2+off;
     g += LN(bx1, by2+1.2*k, bx1, yd+ext, sw) + LN(bx2, by2+1.2*k, bx2, yd+ext, sw) + LN(bx1, yd, bx2, yd, sw);
     g += arrow(bx1,yd,-1,0) + arrow(bx2,yd,1,0);
@@ -2161,7 +2203,7 @@ function placeView(model, cell, v){
         const x0=lb._q[0]+ux*lb._r, y0=lb._q[1]+uy*lb._r;
         const ex = Math.max(pl.x1, Math.min(pl.x2, lb._q[0])), ey = Math.max(pl.y1, Math.min(pl.y2, lb._q[1]));
         g += `<g${dragAttrs(lb.key, 1, pl.x, pl.y, lb._q[0], lb._q[1])}>`;
-        if(Math.hypot(ex-x0,ey-y0) > fs*0.4) g += LN(x0,y0,ex,ey,sw) + `<circle cx="${N4(x0)}" cy="${N4(y0)}" r="${N4(0.35*k)}" fill="#000"/>`;
+        if(Math.hypot(ex-x0,ey-y0) > fs*0.4) g += LN(x0,y0,ex,ey,sw) + `<circle cx="${N4(x0)}" cy="${N4(y0)}" r="${N4(0.35*k)}" fill="${TH.ink}"/>`;
         g += haloText(pl.x, pl.y+fs*0.36, lb._txt, fs, {anchor:"middle"}) + `</g>`;
         hardBoxes.push({x1:pl.x1,y1:pl.y1,x2:pl.x2,y2:pl.y2});
       });
@@ -2196,7 +2238,7 @@ function placeView(model, cell, v){
       const ex = Math.max(pl.x1, Math.min(pl.x2, lb._q[0])), ey = Math.max(pl.y1, Math.min(pl.y2, lb._q[1]));
       const sx = Math.max(lb._q[0]-hw, Math.min(lb._q[0]+hw, ex)), sy = Math.max(lb._q[1]-hh, Math.min(lb._q[1]+hh, ey));
       g += `<g${dragAttrs(lb.key, 1, pl.x, pl.y, lb._q[0], lb._q[1])}>`;
-      if(Math.hypot(ex-sx,ey-sy) > fs*0.4) g += LN(sx,sy,ex,ey,sw) + `<circle cx="${N4(sx)}" cy="${N4(sy)}" r="${N4(0.35*k)}" fill="#000"/>`;
+      if(Math.hypot(ex-sx,ey-sy) > fs*0.4) g += LN(sx,sy,ex,ey,sw) + `<circle cx="${N4(sx)}" cy="${N4(sy)}" r="${N4(0.35*k)}" fill="${TH.ink}"/>`;
       g += haloText(pl.x, pl.y+fs*0.36, lb._txt, fs, {anchor:"middle"}) + `</g>`;
       hardBoxes.push({x1:pl.x1,y1:pl.y1,x2:pl.x2,y2:pl.y2});
     });
@@ -2223,9 +2265,9 @@ function placeView(model, cell, v){
         g += haloText(pl.x, pl.y+fs*0.36, lb._txt, fs, {anchor:"middle"}) + `</g>`;
         /* the pointed-at spot: draggable on its own (data-vs/data-flip map the paper delta back to board mm) */
         g += `<g data-drag="noteanchor|${nid}" data-s="1" data-vs="${N4(s)}" data-flip="${flip}" data-note="${nid}" data-cx="0" data-cy="0" data-ax="0" data-ay="0">`+
-             `<circle cx="${N4(lb._q[0])}" cy="${N4(lb._q[1])}" r="${N4(1.6*k)}" fill="#fff" fill-opacity="0.01"/>`+
-             `<circle cx="${N4(lb._q[0])}" cy="${N4(lb._q[1])}" r="${N4(0.55*k)}" fill="none" stroke="#000" stroke-width="${N4(0.3*k)}"/>`+
-             `<circle cx="${N4(lb._q[0])}" cy="${N4(lb._q[1])}" r="${N4(0.18*k)}" fill="#000"/></g>`;
+             `<circle cx="${N4(lb._q[0])}" cy="${N4(lb._q[1])}" r="${N4(1.6*k)}" fill="${TH.paper}" fill-opacity="0.01"/>`+
+             `<circle cx="${N4(lb._q[0])}" cy="${N4(lb._q[1])}" r="${N4(0.55*k)}" fill="none" stroke="${TH.ink}" stroke-width="${N4(0.3*k)}"/>`+
+             `<circle cx="${N4(lb._q[0])}" cy="${N4(lb._q[1])}" r="${N4(0.18*k)}" fill="${TH.ink}"/></g>`;
       });
     }
   }
@@ -2264,7 +2306,7 @@ function drillSpecOf(model, D, k){
   if(hasSpan) cols.push({w:.22,label:"Layers"});
   const tot = cols.reduce((a,c)=>a+c.w,0); cols.forEach(c=>c.w/=tot);
   const rows = model.drillGroups.map(gr=>{
-    const r = [ (x,y,w,h)=>drillSymbolSvg(gr.sym, x+w/2, y+h/2, Math.min(h*0.32, 1.6*k), 0.22*k, "#000"),
+    const r = [ (x,y,w,h)=>drillSymbolSvg(gr.sym, x+w/2, y+h/2, Math.min(h*0.32, 1.6*k), 0.22*k, TH.ink),
                 String(gr.n), Math.round(gr.dia/0.0254).toString(), fmtMM3(gr.dia), String(gr.qty), gr.platedText ];
     if(hasSpan) r.push(gr.through ? `L1–L${nCu} (thru)` : `L${gr.startPhys}–L${gr.endPhys}`);
     return r;
@@ -2519,7 +2561,7 @@ function partsListPages(model, D, sh, k, fx, fy, fw, fh, gap){
   const pages=[]; let g="", y=fy+gap, first=true;
   const header=()=>{
     const rh=lh*1.5;
-    g += R(x,y,w,rh,{fill:"#f1f1f1",sw:0.3});
+    g += R(x,y,w,rh,{fill:TH.tableTitle,sw:0.3});
     g += T(x+w/2, y+rh*0.68, `${D.tb.boardName||model.name} Parts List`, fs*1.1, {anchor:"middle", bold:true});
     y += rh;
     g += R(x,y,w,rh,{sw:0.3});
@@ -2537,7 +2579,7 @@ function partsListPages(model, D, sh, k, fx, fy, fw, fh, gap){
     wrapped.forEach((ls,i)=>{
       if(i>0) g += LN(xs[i],y,xs[i],y+rh,0.25);
       const al = cols[i].align||"center";
-      ls.forEach((ln,j)=> g += T(al==="left"? xs[i]+pad : (xs[i]+xs[i+1])/2, y+pad*0.6+lh*(j+0.8), ln, fs, {anchor: al==="left"?"start":"middle", fill: b.dnp?"#777":"#000", italic:!!b.dnp}));
+      ls.forEach((ln,j)=> g += T(al==="left"? xs[i]+pad : (xs[i]+xs[i+1])/2, y+pad*0.6+lh*(j+0.8), ln, fs, {anchor: al==="left"?"start":"middle", fill: b.dnp?TH.muted:TH.ink, italic:!!b.dnp}));
     });
     y += rh;
   });
@@ -2848,7 +2890,7 @@ const DEFAULT_ASM_NOTES = ASM_NOTES_V100 + "\n" +
   "Assembled boards are finished product. Boards shall be fully depanelized; all mouse-bite and breakaway tab remnants shall be sanded flush with the board edge. All board edges shall be smooth, with no burrs or sharp edges.";
 const PREVIOUS_ASM_DEFAULTS = [OLD_ASM_NOTES, ASM_NOTES_V100, ASM_NOTES_V101];
 const DEFAULTS = {
-  fabSize:"LETTER", asmSize:"LETTER", zones:true, textScale:1, bottomFlip:"auto",
+  fabSize:"LETTER", asmSize:"LETTER", zones:true, textScale:1, bottomFlip:"auto", style:"classic", realistic:false,
   tb:{company:"", dept:"ENGR", createdBy:"", approvedBy:"", techRef:"", docStatus:"", productTitle:"", boardName:"", partNumber:"", pcbPartNumber:"", rev:"1.0", date:"", dwgFab:"", dwgAsm:""},
   spec:{material:"FR-4", tg:"TG 150-160", thickness:"1.6mm", trackSpace:"6/6mil", minHole:"0.3mm", mask:"Green", silk:"White", edgeConn:"No", bevel:"No",
         finish:"HASL lead free", auThk:'1U"', enepig:'Ni:200U" Pd:2U" Au:2U"', via:"Tenting vias", holeCu:"Standard (20um)", cuOuter:"1 oz Cu", cuInner:"1 oz",
@@ -2871,7 +2913,7 @@ const wrap = $("canvaswrap");
 
 /* ---------- field bindings ---------- */
 const TEXT_FIELDS = [
-  ["s-fabSize","fabSize"],["s-asmSize","asmSize"],["s-bottomFlip","bottomFlip"],
+  ["s-fabSize","fabSize"],["s-asmSize","asmSize"],["s-bottomFlip","bottomFlip"],["s-style","style"],
   ["s-company","tb.company"],["s-dept","tb.dept"],["s-createdBy","tb.createdBy"],["s-approvedBy","tb.approvedBy"],["s-techRef","tb.techRef"],["s-docStatus","tb.docStatus"],
   ["s-productTitle","tb.productTitle"],["s-boardName","tb.boardName"],["s-partNumber","tb.partNumber"],["s-pcbPartNumber","tb.pcbPartNumber"],["s-rev","tb.rev"],["s-date","tb.date"],["s-dwgFab","tb.dwgFab"],["s-dwgAsm","tb.dwgAsm"],
   ["s-material","spec.material"],["s-tg","spec.tg"],["s-thickness","spec.thickness"],["s-trackSpace","spec.trackSpace"],["s-minHole","spec.minHole"],["s-mask","spec.mask"],["s-silk","spec.silk"],
@@ -2880,7 +2922,7 @@ const TEXT_FIELDS = [
   ["s-stackSource","stack.source"],["f-notes","fab.notes"],["a-notes","asm.notes"]
 ];
 const CHECK_FIELDS = [
-  ["s-zones","zones"],["f-silk","fab.silk"],["f-pads","fab.pads"],["f-vias","fab.vias"],["f-traces","fab.traces"],["f-dims","fab.dims"],["f-holeCallouts","fab.holeCallouts"],["f-smallHoles","fab.smallHoles"],["f-millCallouts","fab.millCallouts"],
+  ["s-zones","zones"],["s-realistic","realistic"],["f-silk","fab.silk"],["f-pads","fab.pads"],["f-vias","fab.vias"],["f-traces","fab.traces"],["f-dims","fab.dims"],["f-holeCallouts","fab.holeCallouts"],["f-smallHoles","fab.smallHoles"],["f-millCallouts","fab.millCallouts"],
   ["f-stackDiagram","fab.stackDiagram"],["f-drillTable","fab.drillTable"],["f-ndaa","fab.ndaa"],["f-autoNotes","fab.autoNotes"],
   ["a-silkRow","asm.silkRow"],["a-onePerSheet","asm.onePerSheet"],["a-docu","asm.docu"],["a-pin1","asm.pin1"],["a-spread","asm.spread"],["a-values","asm.values"],["a-partsList","asm.partsList"],["a-bomHardware","asm.bomHardware"],["a-silkViews","asm.silkViews"]
 ];
@@ -3193,6 +3235,7 @@ function rebuild(){
   if(!model) return;
   TEXT_SCALE = Math.max(0.5, Math.min(2, +cfg.textScale || 1));
   OVERRIDES = cfg.overrides || {}; ANNOTATIONS = cfg.annotations || [];
+  applyTheme(cfg.style, !!cfg.realistic, cfg.spec);
   const D = derive();
   docs.fab = buildFabSheets(model, D);
   docs.asm = buildAsmSheets(model, D);
@@ -3204,7 +3247,7 @@ function showSheet(){
   const list = docs[cur.doc]; if(!list||!list.length){ return; }
   const sheet = list[cur.idx];
   const keepPan = pan && pan.key===cur.doc+cur.idx;
-  wrap.innerHTML = `<div class="credit">&copy; 2026 <a href="https://www.kdcircuits.com" target="_blank" rel="noopener">KD Circuits LLC</a> &middot; <a href="https://github.com/krdarrah/Fusion_Drawing_Generator" target="_blank" rel="noopener">source on GitHub</a> (MIT) &middot; suggestions? <a href="https://www.kdcircuits.com/#contact" target="_blank" rel="noopener">contact KD Circuits</a></div><div class="sheetbox" style="aspect-ratio:${sheet.w}/${sheet.h};width:100%;">${sheet.svg}
+  wrap.innerHTML = `<div class="credit">&copy; 2026 <a href="https://www.kdcircuits.com" target="_blank" rel="noopener">KD Circuits LLC</a> &middot; <a href="https://github.com/krdarrah/Fusion_Drawing_Generator" target="_blank" rel="noopener">source on GitHub</a> (MIT) &middot; suggestions? <a href="https://www.kdcircuits.com/#contact" target="_blank" rel="noopener">contact KD Circuits</a></div><div class="sheetbox" style="aspect-ratio:${sheet.w}/${sheet.h};width:100%;background:${TH.paper};">${sheet.svg}
       <div class="zoombar"><button data-zoom="in" title="Zoom in">+</button><button data-zoom="out" title="Zoom out">&minus;</button><button data-zoom="fit">fit</button></div>
       <div class="tip">scroll to zoom &middot; drag to pan &middot; drag a designator, callout or note to move it &middot; drag a note's ring to move the spot it points at &middot; double-click to snap back / edit</div></div>`;
   const svg = wrap.querySelector("svg");
