@@ -1,5 +1,7 @@
 # PCB Drawing Generator
 
+Built by [KD Circuits](https://www.kdcircuits.com) — full product development, from idea to production.
+
 A single-file, offline web tool that turns an EAGLE / Fusion 360 Electronics board file (`.brd`) into the fabrication and assembly documentation a board house needs. Everything runs in your browser; nothing is uploaded.
 
 **Try it:** open `PCB_Drawing_Generator.html` (or the GitHub Pages site). A demo board loads on first open so you can click around.
@@ -38,4 +40,4 @@ Everything lives in one HTML file with no build step. The version and changelog 
 
 ## License
 
-MIT – see `LICENSE`.
+MIT – see `LICENSE`. © 2026 KD Circuits LLC.
