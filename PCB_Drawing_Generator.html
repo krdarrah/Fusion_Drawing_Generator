@@ -1,7 +1,16 @@
 <!doctype html>
 <!--
   PCB Drawing Generator — single-file fab / assembly drawing generator for EAGLE / Fusion 360 .brd files
-  Version 1.4.0 (2026-09-04)
+  Version 1.5.0 (2026-09-14)
+  1.5.0  Orientation marks fixed and made editable. The cathode / + detector no longer mistakes a chamfered body corner, or
+         overlapping silkscreen and documentation lines, for a diode arrow (which put marks on the wrong end, e.g. a + on
+         a ground pad). Polarity now comes from the pad names, then the ground connection (anode or negative on GND, LED
+         cathode on GND), then the footprint artwork (symbol, chamfer, band, dot, silkscreen overshoot, mirror-image
+         pairs cancelled), then pin 1; bidirectional TVS / ESD parts get no mark. Parts whose evidence disagrees are
+         listed under Checks. Right-click a designator, mark or callout on a sheet to move, add or remove a K / + / pin-1
+         mark, hide a part (from the drawings, or also from the parts list) or hide a callout; the "Hidden items & marks"
+         panel lists every change with an undo. Parts with no pads and no footprint (cables, screws, labels) stay off the
+         views automatically but remain in the parts list. Everything is saved in settings and project files.
   1.4.0  Hand assembly mode (third button next to Fab / Assembly drawing): a large board view with one list row per
          value + package per side. Click a row (or a part) to light up every part of that group, search by value,
          package, designator or part number, tick groups as placed (remembered per board), step with the keyboard
@@ -160,6 +169,12 @@ button.btn.sm{padding:4px 7px}
 .noterow{display:grid;grid-template-columns:1fr auto auto;gap:5px;align-items:center}
 .noterow .where{grid-column:1/-1;font:10px "IBM Plex Mono",ui-monospace,monospace;color:var(--dim);letter-spacing:.04em}
 .noteedit{position:absolute;z-index:6;background:var(--panel);border:1px solid var(--accent);border-radius:var(--r);padding:8px;display:flex;flex-direction:column;gap:6px;box-shadow:var(--shadow);width:280px;max-width:calc(100% - 16px)}
+.ctxmenu{position:absolute;z-index:7;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:4px;display:flex;flex-direction:column;min-width:220px;max-width:calc(100% - 16px)}
+.ctxmenu .hd{font:10px "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);padding:5px 8px 3px}
+.ctxmenu button{background:none;border:0;color:var(--ink);text-align:left;padding:6px 8px;font:12px "Archivo","Helvetica Neue",Helvetica,Arial,sans-serif;border-radius:3px;cursor:pointer}
+.ctxmenu button:hover{background:var(--panel-2);color:var(--accent)}
+.ctxmenu hr{border:0;border-top:1px solid var(--line-soft);margin:3px 4px}
+.hidrow{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center;font-size:11.5px;color:var(--ink-2)}
 .sheetbox svg g.flash{animation:noteflash .45s 3}
 @keyframes noteflash{50%{opacity:.15}}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -509,6 +524,15 @@ button.btn.sm{padding:4px 7px}
           <button class="btn" id="btn-resetNotes">Remove all notes</button>
           <span class="help" id="notehint2"></span>
         </div>
+      </div>
+    </details>
+
+    <details class="block" open>
+      <summary>Hidden items &amp; marks</summary>
+      <div class="inner">
+        <div class="help">Right-click a designator, orientation mark or callout on a sheet to hide it, or to move, add or remove a cathode (K), + or pin-1 mark. Parts with no pads and no footprint (cables, screws, labels) stay off the views automatically but remain in the parts list.</div>
+        <div id="hiddenlist" class="noteslist"></div>
+        <div class="btnrow"><button class="btn" id="btn-resetHidden">Undo all hides and mark changes</button></div>
       </div>
     </details>
 
@@ -2221,7 +2245,7 @@ window.DEMO_BRD_GZ = "H4sIAHfhmWoC/+y93XYcOZbvd19PkZaXZ/Wc0xHCZ3x0d/UxRX20ukRJh2
 "use strict";
 
 /* ================================================================== constants */
-const TOOL_VERSION = "1.4.0";
+const TOOL_VERSION = "1.5.0";
 const DEG = Math.PI/180;
 const MIRROR = {1:16,16:1,21:22,22:21,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31,
                 33:34,34:33,35:36,36:35,37:38,38:37,39:40,40:39,41:42,42:41,51:52,52:51};
@@ -2464,9 +2488,10 @@ function parseBoard(xmlText, fileName){
 
   /* signals: traces + vias */
   const traces = [], vias = [];
-  const copperUse = {};
+  const copperUse = {}, padNet = {};                                   /* "REF|pad" -> net name */
   board.querySelectorAll("signals > signal").forEach(sig=>{
     const sn = sig.getAttribute("name");
+    sig.querySelectorAll(":scope > contactref").forEach(cr=>{ padNet[cr.getAttribute("element")+"|"+cr.getAttribute("pad")] = sn; });
     sig.querySelectorAll(":scope > wire").forEach(w=>{
       const L=+w.getAttribute("layer"); if(L>16 || L<1) return;
       const c = num(w.getAttribute("curve"));
@@ -2621,60 +2646,102 @@ function parseBoard(xmlText, fileName){
     const isDiode = /^(D|LED|ZD|Z|TVS|CR|DS)\d/i.test(pt.ref) || /DIODE|LED|SOD|SMA\b|SMB\b|SMC\b|DO-?2/i.test(pt.pkg);
     const isCap = /^C\d/i.test(pt.ref), isConn = /^(J|X|P|CN|CON|SV|SW)\d/i.test(pt.ref);
     const marks = [];
-    /* which end of a two-terminal part does the silkscreen/documentation artwork mark?  Returns the pad on that
-       side: a diode-symbol triangle (apex = cathode), a bar or notch, or an extended outline on one side. */
-    const artworkSide = (padA, padB) => {
+    pt.pads.forEach(pd=>{ pd.net = padNet[pt.ref+"|"+pd.name] || null; });
+    const partText = [pt.value||""].concat(Object.keys(pt.attrs||{}).filter(k=>/^(MPN|MANUFACTURER_PART_NUMBER|MANUFACTURER_PN|MFG_PN|MF_PN|PART_NUMBER|PARTNO|PN|DESCRIPTION|DESC)$/i.test(k)).map(k=>pt.attrs[k])).join(" ");
+    const isLed = /^LED\d/i.test(pt.ref) || /LED/i.test(pt.pkg) || /\bLEDS?\b/i.test(partText);
+    /* bidirectional TVS / ESD suppressors have no polarity: they get no mark rather than a guessed end */
+    const isBidir = /(SMAJ|SMBJ|SMCJ|SMDJ|SMLJ|P4SMA|P6SMB|1\.5SMC|P6KE|1\.5KE|SMF|TPSMA|TPSMB|TPSMC)\d+(\.\d+)?CA\b|BI-?DIRECTIONAL|\bBIDIR|\bPESD(0402|0603|1206)/i.test(partText);
+    /* footprint artwork evidence for which end of a two-terminal part is marked (cathode / positive).
+       Cues on the part's own silkscreen and documentation layers, duplicates removed:
+         symbol  a closed isosceles triangle with its base across the pad axis, apex toward the cathode (weight 3)
+         chamfer a short diagonal cutting a body corner near one end, IPC-7351 pin 1 (weight 3)
+         band    a free-standing line, or a small filled rectangle, across the axis on one side (weight 2)
+         dot     a small circle on one side (weight 1.5)
+         overshoot the silkscreen outline runs past the body further on one end, IPC-7351 pin 1 (weight 1.5)
+       Mirror-image pairs cancel, so symmetric outlines and pin stubs never vote. */
+    const artworkEvidence = (padA, padB) => {
       const ux = padB.c[0]-padA.c[0], uy = padB.c[1]-padA.c[1], L = Math.hypot(ux,uy)||1, dx=ux/L, dy=uy/L;
       const mx=(padA.c[0]+padB.c[0])/2, my=(padA.c[1]+padB.c[1])/2;
-      const proj = q => (q[0]-mx)*dx + (q[1]-my)*dy;
-      const art = shapes.filter(sh=> sh.ref===pt.ref && (sh.layer===21||sh.layer===22||sh.layer===51||sh.layer===52) && sh.kind!=="text");
-      const lines = art.filter(sh=>sh.kind==="line" && sh.pts.length===2);
-      /* triangle: three segments forming a closed loop */
-      for(let i=0;i<lines.length;i++) for(let j=i+1;j<lines.length;j++) for(let k2=j+1;k2<lines.length;k2++){
-        const segs=[lines[i],lines[j],lines[k2]], pts=[]; const near=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1])<0.02;
-        segs.forEach(sg=>sg.pts.forEach(q=>{ if(!pts.some(r=>near(r,q))) pts.push(q); }));
-        if(pts.length!==3) continue;
-        const pr = pts.map(proj).sort((a,b)=>a-b);
-        const apexHi = Math.abs(pr[2]-pr[1]) > Math.abs(pr[1]-pr[0]);   /* two base vertices share a projection */
-        const apex = apexHi ? pr[2] : pr[0], base = apexHi ? (pr[0]+pr[1])/2 : (pr[1]+pr[2])/2;
-        if(Math.abs(apex-base) > 0.1) return apex > base ? padB : padA;
-      }
-      /* bar or notch: a short segment / circle / rect clearly on one side, perpendicular to the axis */
-      let plus=0, minus=0;
-      art.forEach(sh=>{
-        if(sh.kind==="line"){
-          const a=sh.pts[0], b=sh.pts[sh.pts.length-1], len=Math.hypot(b[0]-a[0],b[1]-a[1]); if(len<1e-6) return;
-          const along = Math.abs(((b[0]-a[0])*dx+(b[1]-a[1])*dy)/len);
-          const ta=proj(a), tb=proj(b);
-          if(along<0.3 && Math.abs((ta+tb)/2) > 0.12*L && Math.sign(ta+tb)!==0){ if((ta+tb)>0) plus+=len*3; else minus+=len*3; return; }
-          /* split a long line by the bisector so an extended outline counts on the side it extends to */
-          const n=8; for(let q=0;q<n;q++){ const t0=q/n, t1=(q+1)/n; const c=[a[0]+(b[0]-a[0])*(t0+t1)/2, a[1]+(b[1]-a[1])*(t0+t1)/2]; const pc=proj(c); if(pc>0) plus+=len/n; else minus+=len/n; }
-        } else if(sh.kind==="circle"){ const t=proj(sh.c); if(Math.abs(t)>0.12*L){ if(t>0) plus+=2; else minus+=2; } }
-        else if(sh.kind==="rect"){ const t=proj(sh.c), w=Math.max(sh.w,sh.h); if(Math.abs(t)>0.12*L){ if(t>0) plus+=w*2; else minus+=w*2; } }
+      const T = q => (q[0]-mx)*dx + (q[1]-my)*dy;                       /* along the pad axis, + toward padB */
+      const W = q => -(q[0]-mx)*dy + (q[1]-my)*dx;                      /* across it */
+      const silkL = pt.side==="top" ? 21 : 22, docuL = pt.side==="top" ? 51 : 52, tol = 0.02;
+      const same = (u,v)=>Math.hypot(u[0]-v[0],u[1]-v[1])<tol;
+      const segs = [];
+      shapes.forEach(sh=>{
+        if(sh.ref!==pt.ref || sh.kind!=="line" || (sh.layer!==silkL && sh.layer!==docuL)) return;
+        for(let i=1;i<sh.pts.length;i++){ const u=sh.pts[i-1], v=sh.pts[i], len=Math.hypot(v[0]-u[0],v[1]-u[1]); if(len<1e-6) continue;
+          if(segs.some(o=>(same(o.p,u)&&same(o.q,v))||(same(o.p,v)&&same(o.q,u)))) continue;
+          segs.push({p:u, q:v, layer:sh.layer, len}); }
       });
-      const tot=plus+minus;
-      if(tot>0 && Math.abs(plus-minus) > 0.2*tot) return plus>minus ? padB : padA;
+      const votes = [];
+      const endsFree = sg => !segs.some(o=>o!==sg && (same(o.p,sg.p)||same(o.q,sg.p)||same(o.p,sg.q)||same(o.q,sg.q)));
+      segs.forEach(sg=>{
+        const ta=T(sg.p), tb=T(sg.q), tm=(ta+tb)/2, wm=(W(sg.p)+W(sg.q))/2, along=Math.abs(tb-ta)/sg.len;
+        if(along>0.42 && along<0.91 && Math.abs(wm)>0.15*L && Math.abs(tm)>0.2*L && sg.len<0.5*L) votes.push({t:tm, w:3, what:"chamfer", size:sg.len});
+        else if(along<0.26 && Math.abs(tm)>0.1*L && endsFree(sg)) votes.push({t:tm, w:2, what:"band", size:sg.len});
+      });
+      if(segs.length<=60) for(let i=0;i<segs.length;i++) for(let j=i+1;j<segs.length;j++) for(let k=j+1;k<segs.length;k++){
+        const tri=[segs[i],segs[j],segs[k]], vs=[];
+        tri.forEach(sg=>[sg.p,sg.q].forEach(v=>{ const f=vs.find(o=>same(o.v,v)); if(f) f.n++; else vs.push({v, n:1}); }));
+        if(vs.length!==3 || vs.some(o=>o.n!==2)) continue;               /* a closed triangle: three corners, each shared by two sides */
+        const base = tri.find(sg=>Math.abs(T(sg.q)-T(sg.p))/sg.len < 0.2); if(!base) continue;
+        const apex = vs.find(o=>!same(o.v,base.p) && !same(o.v,base.q)).v, sides = tri.filter(sg=>sg!==base);
+        if(Math.abs(sides[0].len-sides[1].len) > 0.15*Math.max(sides[0].len,sides[1].len)) continue;   /* isosceles, not a cut-off corner */
+        if(Math.abs(W(apex)-(W(base.p)+W(base.q))/2) > 0.2*base.len) continue;                          /* apex over the middle of the base */
+        const h = T(apex)-(T(base.p)+T(base.q))/2; if(Math.abs(h) < 0.3*base.len) continue;
+        votes.push({t: h>0 ? L : -L, w:3, what:"symbol", size:base.len});
+      }
+      shapes.forEach(sh=>{
+        if(sh.ref!==pt.ref || (sh.layer!==silkL && sh.layer!==docuL)) return;
+        if(sh.kind==="circle" && sh.r < 0.25*L) votes.push({t:T(sh.c), w:1.5, what:"dot", size:sh.r});
+        else if(sh.kind==="rect" && !sh.pad && Math.max(sh.w,sh.h) < 0.6*L) votes.push({t:T(sh.c), w:2, what:"band", size:Math.max(sh.w,sh.h)});
+      });
+      const par = segs.filter(sg=>sg.layer===silkL && Math.abs(T(sg.q)-T(sg.p))/sg.len > 0.97);
+      if(par.length){
+        const lo = Math.min(...par.map(sg=>Math.min(T(sg.p),T(sg.q)))), hi = Math.max(...par.map(sg=>Math.max(T(sg.p),T(sg.q))));
+        const over = (-lo) - hi; if(Math.abs(over) > Math.max(0.1, 0.03*L)) votes.push({t: over>0 ? -L : L, w:1.5, what:"overshoot", size:Math.abs(over)});
+      }
+      const used = new Set();
+      votes.forEach((v,i)=>{ if(used.has(i)) return;
+        const j = votes.findIndex((o,k)=>k!==i && !used.has(k) && o.what===v.what && Math.sign(o.t)!==Math.sign(v.t) && Math.abs(o.t+v.t) < 0.06*L && Math.abs(o.size-v.size) <= 0.3*Math.max(o.size,v.size));
+        if(j>=0){ used.add(i); used.add(j); } });
+      let sa=0, sb=0; votes.forEach((v,i)=>{ if(used.has(i) || Math.abs(v.t) < 0.08*L) return; if(v.t>0) sb+=v.w; else sa+=v.w; });
+      if(sa===sb) return {pad:null, conflict: sa>0};
+      return {pad: sa>sb ? padA : padB, conflict: Math.min(sa,sb)>0};
+    };
+    /* polarity of a two-terminal part, strongest evidence first: the ground connection (a diode or polarized
+       capacitor has its anode / negative on ground, an LED its cathode), then the footprint artwork, then pin 1 by
+       IPC-7351 convention. Anything short of full agreement leaves a note for the Checks panel. */
+    const isGnd = n => /^(A|D|P|S|E)?GND\d*$|^VSS\d*$|^0V$/i.test(String(n||""));
+    const isNegRail = n => /^-|NEG|VEE|BAT-|GND_?IN/i.test(String(n||""));
+    const polarity = () => {
+      const [a,b] = pt.pads, art = artworkEvidence(a, b), conv = pt.pads.find(pd=>up(pd)==="1") || null;
+      if(isGnd(a.net)!==isGnd(b.net) && !isNegRail(a.net) && !isNegRail(b.net)){
+        const g = isGnd(a.net) ? a : b, other = g===a ? b : a, pick = isLed ? g : other;
+        const note = art.pad && art.pad!==pick ? `the footprint marks pad ${art.pad.name}, but ${isLed?"an LED cathode belongs on":"the anode belongs on"} ${g.net} (pad ${g.name}), so pad ${pick.name} is drawn` : "";
+        return {pad:pick, how:"net", note};
+      }
+      if(art.pad) return {pad:art.pad, how:"artwork", note: art.conflict ? "the footprint's polarity markings disagree with each other" : ""};
+      if(conv) return {pad:conv, how:"convention", note:"the footprint has no polarity marking, so pin 1 (IPC-7351) is used"};
       return null;
     };
     const cathode = find(/^(K|CATHODE|CAT|KATHODE|C-|-|NEG)$/) || (isDiode ? find(/^(C)$/) : null);
     const anode   = find(/^(A|ANODE|AN|\+|POS)$/);
-    if(isDiode && cathode && (anode || pt.pads.length<=3)) marks.push({kind:"K", c:cathode.c});
+    if(isDiode && isBidir && pt.pads.length===2) pt.bidirectional = true;
+    else if(isDiode && cathode && (anode || pt.pads.length<=3)) marks.push({kind:"K", c:cathode.c, how:"pads"});
     else if(isDiode && pt.pads.length===2){
-      const side = artworkSide(pt.pads[0], pt.pads[1]);
-      const byConv = pt.pads.find(pd=>up(pd)==="1");                   /* IPC-7351: pin 1 of a diode is the cathode */
-      const pick = side || byConv;
-      if(pick) marks.push({kind:"K", c:pick.c, how: side ? "artwork" : "convention"});
+      const r = polarity(); if(r) marks.push({kind:"K", c:r.pad.c, how:r.how, note:r.note});
     }
     else if(isCap && pt.pads.length<=4){
       const plus = find(/^(\+|P|POS|PLUS|VP)$/), minus = find(/^(-|N|NEG|MINUS|VN)$/);
-      if(plus && (minus || pt.pads.length===2)) marks.push({kind:"+", c:plus.c});
+      if(plus && (minus || pt.pads.length===2)) marks.push({kind:"+", c:plus.c, how:"pads"});
       else if(pt.pads.length===2 && /CAPPM|CAPAE|CAPMP|TANT|ELEC|POL|^CP|CPOL/i.test(pt.pkg)){
-        const side = artworkSide(pt.pads[0], pt.pads[1]); if(side) marks.push({kind:"+", c:side.c, how:"artwork"});
+        const r = polarity(); if(r) marks.push({kind:"+", c:r.pad.c, how:r.how, note:r.note});
       }
     }
     if(!marks.length){
       const p1 = find(/^(1|A1|P1|P\$1|PIN1)$/);
-      if(p1 && (pt.pads.length>=3 || isConn)) marks.push({kind:"1", c:p1.c});
+      if(p1 && (pt.pads.length>=3 || isConn)) marks.push({kind:"1", c:p1.c, how:"pads"});
     }
     pt.marks = marks;
     pt.pin1 = marks.length ? marks[0].c : null;
@@ -2685,6 +2752,8 @@ function parseBoard(xmlText, fileName){
       /^(PAD|SMDPAD|TESTPOINT|TEST-POINT|TEST_POINT|TP|FIDUCIAL|FID|MOUNT|HOLE|LOGO|SOLDERPAD)/i.test(pt.pkg) ||
       /PAD\.|^PAD_|TESTPOINT|TEST-POINT|FIDUCIAL|MOUNT/i.test(pt.pkg) ||
       (pt.pads.length===1 && !pt.value) );
+    /* BOM-only items (cables, screws, labels): no pads and no footprint geometry, so nothing to place on the board */
+    pt.bomOnly = !pt.pads.length && !shapes.some(sh=>sh.ref===pt.ref && sh.kind!=="text");
   });
   parts.sort((a,b)=>a.ref.localeCompare(b.ref,undefined,{numeric:true}));
 
@@ -2704,7 +2773,7 @@ function parseBoard(xmlText, fileName){
      are scaled and centred on this box so overhanging bodies neither clip nor run into the caption. Artwork
      further than 15 mm outside the board is treated as decoration and ignored. */
   const bbAsm = {x1:bb.x1, y1:bb.y1, x2:bb.x2, y2:bb.y2};
-  parts.forEach(pt=>{ if(pt.hardware || !pt.ext) return; const e=pt.ext;
+  parts.forEach(pt=>{ if(pt.hardware || pt.bomOnly || !pt.ext) return; const e=pt.ext;
     bbAsm.x1 = Math.min(bbAsm.x1, Math.max(e.x1, bb.x1-15)); bbAsm.y1 = Math.min(bbAsm.y1, Math.max(e.y1, bb.y1-15));
     bbAsm.x2 = Math.max(bbAsm.x2, Math.min(e.x2, bb.x2+15)); bbAsm.y2 = Math.max(bbAsm.y2, Math.min(e.y2, bb.y2+15)); });
   return { name:(fileName||"board").replace(/\.[^.]+$/,""), fileName, shapes, parts, traces, vias, outline, outlineCircles, milling,
@@ -2981,7 +3050,7 @@ function renderBoardView(model, o){
   /* ---- refdes + pin 1 (assembly) ---- */
   let labels = [];
   if(mode==="asm"){
-    const parts = model.parts.filter(pt=>pt.side===near && (opts.showHardware || !pt.hardware)).map(pt=> opts.docu
+    const parts = model.parts.filter(pt=>pt.side===near && (opts.showHardware || !pt.hardware) && onDrawing(pt)).map(pt=> opts.docu
         ? Object.assign({}, pt, {ext:pt.extDocu, area:pt.areaDocu, cx:(pt.extDocu.x1+pt.extDocu.x2)/2, cy:(pt.extDocu.y1+pt.extDocu.y2)/2})
         : pt);
     let fsPaper = opts.refSize || 2.0;             /* paper mm */
@@ -3026,13 +3095,13 @@ function renderBoardView(model, o){
     const markGlyphs = [];
     if(opts.pin1){
       const kk = opts.k||1, dotR = 0.38*kk/s, mfs = Math.max(1.0, 1.6*kk)/s, off = 0.55*kk/s;
-      parts.forEach(pt=> (pt.marks||[]).forEach(m=>{
-        if(m.kind==="1"){ const q=p(m.c[0],m.c[1]); markGlyphs.push({kind:"1", q, dotR, kk, dotOnly:true}); return; }
+      parts.forEach(pt=> marksOf(pt).forEach(m=>{
+        if(m.kind==="1"){ const q=p(m.c[0],m.c[1]); markGlyphs.push({kind:"1", q, dotR, kk, dotOnly:true, ref:pt.ref}); return; }
         const q=p(m.c[0],m.c[1]), c=p(pt.cx,pt.cy); let dx=q[0]-c[0], dy=q[1]-c[1]; const d=Math.hypot(dx,dy); if(d<1e-6){ dx=0; dy=-1; } else { dx/=d; dy/=d; }
         const pd = pt.pads.find(x=>x.c===m.c); const padR = pd ? (pd.kind==="tht" ? pd.r : Math.max(Math.abs(pd.w),Math.abs(pd.h))/2) : 0.4;
         const tx = q[0]+dx*(padR+off+mfs*0.35), ty = q[1]+dy*(padR+off+mfs*0.35);
         const bw = mfs*0.75, bh = mfs*0.95;
-        markGlyphs.push({kind:m.kind, q, dx, dy, padR, tx, ty, bw, bh, mfs, dotR, kk});
+        markGlyphs.push({kind:m.kind, q, dx, dy, padR, tx, ty, bw, bh, mfs, dotR, kk, ref:pt.ref});
       }));
     }
     if(typeof placeLabels==="function"){
@@ -3118,7 +3187,7 @@ function renderBoardView(model, o){
     });
     }
     labels = model.parts.map(pt=>out.get(pt.ref)||"");
-    const pins = markGlyphs.map(g=>{
+    const pins = markGlyphs.map(g=>`<g data-mark="${esc(g.ref)}">`+(()=>{
       if(g.dotOnly) return `<circle cx="${N(g.q[0])}" cy="${N(g.q[1])}" r="${N(g.dotR)}" fill="${INK}" stroke="${TH.backing}" stroke-width="${N(g.dotR*0.35)}" paint-order="stroke"/>`;
       const back = `<rect x="${N(g.tx-g.bw/2)}" y="${N(g.ty-g.bh/2)}" width="${N(g.bw)}" height="${N(g.bh)}" rx="${N(g.mfs*0.12)}" fill="${TH.backing}" fill-opacity="0.9"/>`;
       const txt = `<text x="${N(g.tx)}" y="${N(g.ty)}" dy="0.35em" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="${N(g.mfs)}" fill="${INK}">${g.kind}</text>`;
@@ -3128,14 +3197,14 @@ function renderBoardView(model, o){
         return `<line x1="${N(ex-nx*L)}" y1="${N(ey-ny*L)}" x2="${N(ex+nx*L)}" y2="${N(ey+ny*L)}" stroke="${INK}" stroke-width="${N(0.3*g.kk/s)}"/>`+back+txt;
       }
       return `<circle cx="${N(g.q[0])}" cy="${N(g.q[1])}" r="${N(g.dotR)}" fill="${INK}"/>`+back+txt;
-    }).join("");
+    })()+`</g>`).join("");
     S.push(`<g data-g="pin1">${pins}</g><g data-g="refdes">${labels.join("")}</g>`);
   }
 
   /* view-space bbox of the board */
   const c1=p(model.bb.x1,model.bb.y1), c2=p(model.bb.x2,model.bb.y2);
   const vb = {x1:Math.min(c1[0],c2[0]), y1:Math.min(c1[1],c2[1]), x2:Math.max(c1[0],c2[0]), y2:Math.max(c1[1],c2[1])};
-  const sideParts = model.parts.filter(pt=>pt.side===near);
+  const sideParts = model.parts.filter(pt=>pt.side===near && !pt.bomOnly);
   const padsOnly = mode==="asm" && sideParts.length>0 && sideParts.every(pt=>pt.hardware);
   return { svg:S.join(""), vb, p, padsOnly };
 }
@@ -3181,6 +3250,16 @@ function wrapText(str, maxW, fs){
   return out.length?out:[""];
 }
 let TEXT_SCALE = 1;                                                 /* user text-size multiplier (cfg.textScale) */
+/* parts, callouts and orientation marks changed by hand (right-click on a sheet); read from cfg at render time */
+function onDrawing(pt){ const h = (cfg && cfg.hide) || {}; if((h.parts||{})[pt.ref]) return false; return !pt.bomOnly || !!(h.show||{})[pt.ref]; }
+function inPartsList(pt){ const x = (((cfg && cfg.hide) || {}).parts || {})[pt.ref]; return !(x && x.list); }
+function calloutHidden(key){ return !!((((cfg && cfg.hide) || {}).callouts || {})[key]); }
+function marksOf(pt){
+  const o = ((cfg && cfg.marks) || {})[pt.ref]; if(!o) return pt.marks||[];
+  if(o.none) return [];
+  const pd = pt.pads.find(x=>String(x.name)===String(o.pad));
+  return pd ? [{kind:o.kind||"1", c:pd.c, how:"manual"}] : (pt.marks||[]);
+}
 let OVERRIDES = {};                                                 /* manually dragged label positions, keyed per label */
 let ANNOTATIONS = [];                                               /* user notes: {id, view, x, y (board mm), text, dx, dy} */
 let VIEW_REG = [];                                                  /* views placed on the sheet being built (for click mapping) */
@@ -3399,7 +3478,7 @@ function placeView(model, cell, v){
       if(v.caption) obs.push({x1:cell.x, y1:by2+mB-4*k, x2:cell.x+cell.w, y2:cell.y+cell.h, hard:true});   /* caption band */
       const all = items.map((h,i)=>{ const q=P(h.c[0],h.c[1]), r0=h.d/2*s, txt=textOf(h);
         const key = `hole|${v.side}|${txt}|${h.c[0].toFixed(2)},${h.c[1].toFixed(2)}`, w=twidth(txt,fs)+fs*0.8, hh=fs*1.25;
-        return {id:"h"+i, key, ax:q[0], ay:q[1], w, h:hh, priority:h.d, home:{x1:q[0]-r0,y1:q[1]-r0,x2:q[0]+r0,y2:q[1]+r0}, allowLeader:true, _q:q, _r:r0, _h:h, _txt:txt, _ov:OVERRIDES[key]}; });
+        return {id:"h"+i, key, ax:q[0], ay:q[1], w, h:hh, priority:h.d, home:{x1:q[0]-r0,y1:q[1]-r0,x2:q[0]+r0,y2:q[1]+r0}, allowLeader:true, _q:q, _r:r0, _h:h, _txt:txt, _ov:OVERRIDES[key]}; }).filter(lb=>!calloutHidden(lb.key));
       const labels = all.filter(lb=>!lb._ov);
       all.filter(lb=>lb._ov).forEach(lb=>{ const x=lb.ax+lb._ov.dx, y=lb.ay+lb._ov.dy; lb._fixed={x,y,x1:x-lb.w/2,y1:y-lb.h/2,x2:x+lb.w/2,y2:y+lb.h/2}; obs.push(Object.assign({hard:true}, lb._fixed)); });
       const calloutBounds = Object.assign({}, cellBounds, {y2: Math.min(cellBounds.y2, by2+mB-4*k)});
@@ -3436,7 +3515,7 @@ function placeView(model, cell, v){
     if(v.caption) obs.push({x1:cell.x, y1:by2+mB-4*k, x2:cell.x+cell.w, y2:cell.y+cell.h, hard:true});
     const all = model.milledGroups.slice(0,12).map((m,i)=>{ const q=P(m.cx,m.cy), r0=m.r*s;
       const key = `mill|${m.label}|${m.cx.toFixed(2)},${m.cy.toFixed(2)}`, w=twidth(m.label,fs)+fs*0.8, hh=fs*1.25;
-      return {id:"m"+i, key, ax:q[0], ay:q[1], w, h:hh, priority:m.r, home:{x1:q[0]-r0,y1:q[1]-r0,x2:q[0]+r0,y2:q[1]+r0}, allowLeader:true, _q:q, _m:m, _txt:m.label, _ov:OVERRIDES[key]}; });
+      return {id:"m"+i, key, ax:q[0], ay:q[1], w, h:hh, priority:m.r, home:{x1:q[0]-r0,y1:q[1]-r0,x2:q[0]+r0,y2:q[1]+r0}, allowLeader:true, _q:q, _m:m, _txt:m.label, _ov:OVERRIDES[key]}; }).filter(lb=>!calloutHidden(lb.key));
     const labels = all.filter(lb=>!lb._ov);
     all.filter(lb=>lb._ov).forEach(lb=>{ const x=lb.ax+lb._ov.dx, y=lb.ay+lb._ov.dy; lb._fixed={x,y,x1:x-lb.w/2,y1:y-lb.h/2,x2:x+lb.w/2,y2:y+lb.h/2}; obs.push(Object.assign({hard:true}, lb._fixed)); });
     const bounds = Object.assign({}, cellBounds, {y2: Math.min(cellBounds.y2, by2+mB-4*k)});
@@ -3745,7 +3824,7 @@ function buildAsmSheets(model, D){
   /* how crowded the designators would be at a given scale: label area over board area on paper (the renderer
      starts shrinking labels above 0.30) */
   const labelDensity = sc => { const fs = D.asm.refSize||2, ba = model.w*model.h*sc*sc; let worst = 0;
-    ["top","bottom"].forEach(side=>{ const la = model.parts.filter(pt=>pt.side===side && (D.asm.bomHardware || !pt.hardware))
+    ["top","bottom"].forEach(side=>{ const la = model.parts.filter(pt=>pt.side===side && (D.asm.bomHardware || !pt.hardware) && onDrawing(pt))
       .reduce((a,pt)=> a + (((D.asm.values&&pt.value)?pt.value:pt.ref).length*0.62+0.35)*fs*fs*1.05, 0); if(ba>0) worst = Math.max(worst, la/ba); });
     return worst; };
   /* group views into pages */
@@ -4139,7 +4218,7 @@ const DEFAULTS = {
   stack:{source:"pcbway", custom:null},
   fab:{silk:true, pads:true, vias:true, traces:false, dims:true, holeCallouts:true, smallHoles:false, millCallouts:true, stackDiagram:true, drillTable:true, ndaa:false, autoNotes:true, notes:""},
   asm:{silkRow:true, layout:"auto", onePerSheet:false, docu:false, fitInside:true, refMin:0.8, pin1:true, spread:true, values:false, partsList:true, bomHardware:false, silkViews:true, refSize:2.0, notes:DEFAULT_ASM_NOTES},
-  logo:null, overrides:{}, annotations:[]
+  logo:null, overrides:{}, annotations:[], hide:{parts:{}, callouts:{}, show:{}}, marks:{}
 };
 let cfg = JSON.parse(JSON.stringify(DEFAULTS));
 /* settings saved before 1.3.3 have no tb.contact: give them the new identity defaults (company only if it was blank) */
@@ -4266,6 +4345,8 @@ function applySettings(obj, sourceLabel, opts){
   deepMerge(fresh, migrateTb(JSON.parse(JSON.stringify(obj.cfg || obj))));     /* own copy: the live cfg must never alias the imported object */
   if(!Array.isArray(fresh.spec.special)) fresh.spec.special = [];
   if(!Array.isArray(fresh.annotations)) fresh.annotations = []; if(!fresh.overrides || typeof fresh.overrides!=="object") fresh.overrides = {};
+  if(!fresh.hide || typeof fresh.hide!=="object") fresh.hide = {}; ["parts","callouts","show"].forEach(k=>{ if(!fresh.hide[k] || typeof fresh.hide[k]!=="object") fresh.hide[k] = {}; });
+  if(!fresh.marks || typeof fresh.marks!=="object") fresh.marks = {};
   cfg = fresh; window.__pcbdg.cfg = cfg;
   if(obj.vendorImg && obj.vendorImg.src) vendorImg = obj.vendorImg;
   syncForm(); renderStackEditor(); renderAutoNotes(); renderOverrideNote();
@@ -4489,15 +4570,15 @@ function fabNotes(){
 function asmNotes(){
   const n = String(cfg.asm.notes||"").split(/\r?\n/).map(t=>t.trim()).filter(Boolean);
   if(model){
-    const comps = model.parts.filter(p=>!p.hardware && !p.dnp);
+    const comps = model.parts.filter(p=>!p.hardware && !p.dnp && !p.bomOnly);
     if(comps.some(p=>p.side==="bottom") && comps.some(p=>p.side==="top")) n.push("Components are placed on both sides of the board; see Board Top and Board Bottom views.");
-    else if(comps.length && !comps.some(p=>p.side==="bottom") && model.parts.some(p=>p.side==="bottom")) n.push("All components are on the top side; the bottom side carries solder pads only.");
+    else if(comps.length && !comps.some(p=>p.side==="bottom") && model.parts.some(p=>p.side==="bottom" && !p.bomOnly)) n.push("All components are on the top side; the bottom side carries solder pads only.");
     if(model.parts.some(p=>!p.dnp && !p.hardware && p.pads.some(pd=>pd.kind==="tht"))) n.push("Through-hole components shall be soldered per J-STD-001 with leads trimmed to a maximum protrusion of 1.5 mm.");
     if(cfg.asm.pin1){
-      const kinds = new Set(); model.parts.forEach(p=>(p.marks||[]).forEach(m=>kinds.add(m.kind)));
+      const kinds = new Set(); model.parts.filter(onDrawing).forEach(p=>marksOf(p).forEach(m=>kinds.add(m.kind)));
       const parts = [];
       if(kinds.has("1")) parts.push("a dot identifies pin 1");
-      if(kinds.has("K")) parts.push("a bar and \"K\" mark the cathode of diodes and LEDs (read from the footprint artwork, or pin 1 by IPC-7351 convention when the artwork is symmetric)");
+      if(kinds.has("K")) parts.push("a bar and \"K\" mark the cathode of diodes and LEDs (from the pad names, the ground connection or the footprint artwork, otherwise pin 1 by IPC-7351 convention)");
       if(kinds.has("+")) parts.push("\"+\" marks the positive terminal of polarized capacitors");
       if(parts.length) n.push("Orientation marks on this drawing: " + parts.join("; ") + ". Marks are derived from the component footprints; verify against the schematic when in doubt.");
     }
@@ -4514,6 +4595,7 @@ function buildBom(){
   const g = new Map();
   model.parts.forEach(pt=>{
     if(pt.hardware && !cfg.asm.bomHardware) return;
+    if(!inPartsList(pt)) return;
     const a = pt.attrs;
     const mpn = pick(a,["MPN","MANUFACTURER_PART_NUMBER","MANUFACTURER_PN","MFG_PN","MF_PN","PARTNO","PART_NUMBER","PN"]);
     const mfr = pick(a,["MANUFACTURER","MFR","MF","MANUFACTURER_NAME","MFG"]);
@@ -4587,6 +4669,87 @@ function rebuild(){
   if(docs[cur.doc] && cur.idx >= docs[cur.doc].length) cur.idx = 0;
 }
 
+/* ---------- hiding things and changing orientation marks by hand ---------- */
+const MARK_NAME = {K:"cathode mark (K)", "+":"+ mark", "1":"pin 1 dot"};
+function hideState(){
+  if(!cfg.hide || typeof cfg.hide!=="object") cfg.hide = {};
+  ["parts","callouts","show"].forEach(k=>{ if(!cfg.hide[k] || typeof cfg.hide[k]!=="object") cfg.hide[k] = {}; });
+  if(!cfg.marks || typeof cfg.marks!=="object") cfg.marks = {};
+  return cfg.hide;
+}
+function drawingChanged(){ save(); renderOverrideNote(); if(model){ runChecks(); rebuild(); showSheet(); } }
+function partMenu(ref, lab){
+  const pt = model && model.parts.find(p=>p.ref===ref); if(!pt) return [];
+  const h = hideState(), items = [];
+  if(lab && lab.dataset.drag && lab.dataset.drag.indexOf("ref|")===0){
+    const dkey = lab.dataset.drag;
+    items.push({label:"Turn 90°", run:()=>{ cfg.overrides = cfg.overrides||{}; const prev = cfg.overrides[dkey]||{}; cfg.overrides[dkey] = Object.assign({}, prev, {rot: (+lab.dataset.rot||0)===90 ? 0 : 90}); drawingChanged(); }});
+    if((cfg.overrides||{})[dkey]) items.push({label:"Reset the label (automatic place, size and turn)", run:()=>{ delete cfg.overrides[dkey]; drawingChanged(); }});
+  }
+  if(pt.pads.length>=2){
+    if(items.length) items.push("-");
+    const padLabel = pd => `pad ${pd.name}` + (pd.net ? ` (${pd.net})` : "");
+    const cur = marksOf(pt);
+    if(cur.length){
+      const m = cur[0], onPad = pt.pads.find(pd=>pd.c===m.c) || pt.pads[0];
+      pt.pads.filter(pd=>pd!==onPad).slice(0,6).forEach(pd=> items.push({label:`Move the ${MARK_NAME[m.kind]} to ${padLabel(pd)}`, run:()=>{ cfg.marks[ref] = {kind:m.kind, pad:String(pd.name)}; drawingChanged(); }}));
+      ["K","+","1"].filter(k=>k!==m.kind).forEach(k=> items.push({label:`Draw a ${MARK_NAME[k]} there instead`, run:()=>{ cfg.marks[ref] = {kind:k, pad:String(onPad.name)}; drawingChanged(); }}));
+      items.push({label:`Remove the ${MARK_NAME[m.kind]}`, run:()=>{ cfg.marks[ref] = {none:true}; drawingChanged(); }});
+    } else {
+      const first = pt.pads.find(pd=>String(pd.name)==="1") || pt.pads[0];
+      ["K","+","1"].forEach(k=> items.push({label:`Add a ${MARK_NAME[k]} on ${padLabel(first)}`, run:()=>{ cfg.marks[ref] = {kind:k, pad:String(first.name)}; drawingChanged(); }}));
+    }
+    if(cfg.marks[ref]) items.push({label:"Use the automatic mark again", run:()=>{ delete cfg.marks[ref]; drawingChanged(); }});
+  }
+  if(items.length) items.push("-");
+  items.push({label:`Hide ${ref} from the drawings`, run:()=>{ h.parts[ref] = {list:false}; delete h.show[ref]; drawingChanged(); }});
+  items.push({label:`Hide ${ref} from the drawings and the parts list`, run:()=>{ h.parts[ref] = {list:true}; delete h.show[ref]; drawingChanged(); }});
+  return items;
+}
+function calloutMenu(lab){
+  const dkey = lab.dataset.drag, h = hideState(), items = [];
+  if((cfg.overrides||{})[dkey]) items.push({label:"Reset the position", run:()=>{ delete cfg.overrides[dkey]; drawingChanged(); }});
+  items.push({label:"Hide this callout", run:()=>{ h.callouts[dkey] = true; drawingChanged(); }});
+  return items;
+}
+function calloutLabel(key){ const a = key.split("|"); return a[0]==="hole" ? `${a[2]} hole callout` : a[0]==="mill" ? `${a[1]} callout` : key; }
+function renderHiddenList(){
+  const el = $("hiddenlist"); if(!el) return;
+  if(!model){ el.innerHTML = `<div class="help">Load a board first.</div>`; return; }
+  const h = hideState(), rows = [];
+  model.parts.filter(p=>p.bomOnly && !h.parts[p.ref]).forEach(p=> rows.push(h.show[p.ref]
+    ? {text:`${p.ref} · shown on the views although it has no pads`, act:"unshow", key:p.ref, btn:"hide"}
+    : {text:`${p.ref} · no pads or footprint, left off the views`, act:"show", key:p.ref, btn:"show"}));
+  Object.keys(h.parts).forEach(ref=> rows.push({text:`${ref} · hidden from the drawings${h.parts[ref] && h.parts[ref].list ? " and parts list" : ""}`, act:"unhide", key:ref, btn:"show"}));
+  Object.keys(h.callouts).forEach(k=> rows.push({text:`${calloutLabel(k)} · hidden`, act:"uncallout", key:k, btn:"show"}));
+  Object.keys(cfg.marks).forEach(ref=>{ const o = cfg.marks[ref];
+    rows.push({text: o.none ? `${ref} · orientation mark removed` : `${ref} · ${MARK_NAME[o.kind]||"mark"} set on pad ${o.pad}`, act:"unmark", key:ref, btn:"auto"}); });
+  el.innerHTML = rows.length ? rows.map(r=>`<div class="hidrow"><span>${esc(r.text)}</span><button class="btn sm" data-act="${r.act}" data-key="${esc(r.key)}">${r.btn}</button></div>`).join("")
+                             : `<div class="help">Nothing hidden and no marks changed.</div>`;
+}
+$("hiddenlist").addEventListener("click", e=>{ const btn = e.target.closest("button[data-act]"); if(!btn) return; const h = hideState(), k = btn.dataset.key;
+  if(btn.dataset.act==="show") h.show[k] = true; else if(btn.dataset.act==="unshow") delete h.show[k];
+  else if(btn.dataset.act==="unhide") delete h.parts[k]; else if(btn.dataset.act==="uncallout") delete h.callouts[k];
+  else if(btn.dataset.act==="unmark") delete cfg.marks[k];
+  drawingChanged(); });
+$("btn-resetHidden").addEventListener("click", ()=>{ cfg.hide = {parts:{}, callouts:{}, show:{}}; cfg.marks = {}; drawingChanged(); });
+let ctxMenu = null;
+function closeCtxMenu(){ if(ctxMenu){ ctxMenu.remove(); ctxMenu = null; } }
+function openCtxMenu(clientX, clientY, title, items){
+  closeCtxMenu(); closeNoteEditor();
+  if(!items.length) return;
+  const m = document.createElement("div"); m.className = "ctxmenu";
+  m.innerHTML = (title ? `<div class="hd">${esc(title)}</div>` : "") + items.map((it,i)=> it==="-" ? "<hr>" : `<button data-i="${i}">${esc(it.label)}</button>`).join("");
+  wrap.appendChild(m); ctxMenu = m;
+  const r = wrap.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(clientX-r.left+2, r.width-m.offsetWidth-4)) + "px";
+  m.style.top  = Math.max(4, Math.min(clientY-r.top+2, r.height-m.offsetHeight-4)) + "px";
+  m.addEventListener("click", e=>{ const btn = e.target.closest("button[data-i]"); if(!btn) return; const it = items[+btn.dataset.i]; closeCtxMenu(); it.run(); });
+  ["pointerdown","wheel","dblclick","contextmenu"].forEach(ev=> m.addEventListener(ev, e=>{ e.stopPropagation(); if(ev==="contextmenu") e.preventDefault(); }));
+}
+wrap.addEventListener("pointerdown", e=>{ if(ctxMenu && !ctxMenu.contains(e.target)) closeCtxMenu(); });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeCtxMenu(); });
+
 /* ================================================================== hand assembly (build) mode
    One row per value + package (+ part number) per side, i.e. one bag or reel. Selecting a row lights every part of
    that group on a large board view; placed groups are remembered per board in localStorage. */
@@ -4613,10 +4776,10 @@ function buildGroups(){
     const r = g.get(key); r.parts.push(pt); if(pt.pads.some(pd=>pd.kind==="tht")) r.tht = true; r.area += pt.area||0; BUILD.refKey[pt.ref] = key;
   });
   const rows = [...g.values()];
-  rows.forEach(r=>{ r.parts.sort((a,b)=>a.ref.localeCompare(b.ref,undefined,{numeric:true})); r.refs = r.parts.map(p=>p.ref); r.qty = r.parts.length; r.area /= r.qty; });
+  rows.forEach(r=>{ r.parts.sort((a,b)=>a.ref.localeCompare(b.ref,undefined,{numeric:true})); r.refs = r.parts.map(p=>p.ref); r.qty = r.parts.length; r.area /= r.qty; r.offBoard = r.parts.every(p=>!onDrawing(p)); });
   const byRef = (a,b)=> a.refs[0].localeCompare(b.refs[0],undefined,{numeric:true});
   const sideOrd = x => x.side==="top" ? 0 : 1;
-  rows.sort((a,b)=> (a.dnp-b.dnp) || (sideOrd(a)-sideOrd(b)) ||
+  rows.sort((a,b)=> (a.dnp-b.dnp) || (a.offBoard-b.offBoard) || (sideOrd(a)-sideOrd(b)) ||
     (BUILD.sort==="size"  ? ((a.tht-b.tht) || (a.area-b.area) || a.pkg.localeCompare(b.pkg) || byRef(a,b)) :
      BUILD.sort==="value" ? (a.value.localeCompare(b.value,undefined,{numeric:true}) || a.pkg.localeCompare(b.pkg) || byRef(a,b)) : byRef(a,b)));
   return rows;
@@ -4631,7 +4794,7 @@ function buildBoardSvg(side){
                                     bounds:{x1:vb.x1-m, y1:vb.y1-m, x2:vb.x2+m, y2:vb.y2+m}}});
   const A = th => flip==="x" ? (180+th) : flip==="y" ? th : (-th);
   const N = v => (+v).toFixed(3);
-  const ov = model.parts.filter(pt=>pt.side===side && !pt.hardware).map(pt=>{
+  const ov = model.parts.filter(pt=>pt.side===side && !pt.hardware && onDrawing(pt)).map(pt=>{
     const pads = [];
     const cuL = side==="top" ? 1 : 16;
     pt.pads.forEach(pd=>{ const q = r.p(pd.c[0], pd.c[1]), t = ` transform="translate(${N(q[0])} ${N(q[1])}) rotate(${N(A(pd.ang||0))})"`;
@@ -4646,7 +4809,7 @@ function buildBoardSvg(side){
     const x1 = Math.min(q1[0],q2[0]), y1 = Math.min(q1[1],q2[1]), w = Math.abs(q2[0]-q1[0]), h = Math.abs(q2[1]-q1[1]);
     const pad = 0.25, c = r.p(pt.cx, pt.cy);
     const fs = Math.max(0.55, Math.min(1.6, Math.min(w,h)*0.45));
-    const marks = (pt.marks||[]).map(mk=>{ const q = r.p(mk.c[0], mk.c[1]);
+    const marks = marksOf(pt).map(mk=>{ const q = r.p(mk.c[0], mk.c[1]);
       return `<circle class="mk" cx="${N(q[0])}" cy="${N(q[1])}" r="${N(Math.max(0.22, fs*0.3))}"/>` +
              (mk.kind!=="1" ? `<text class="mkt" x="${N(q[0])}" y="${N(q[1])}" dy="0.35em" text-anchor="middle" font-size="${N(Math.max(0.3, fs*0.5))}">${mk.kind}</text>` : ""); }).join("");
     return `<g class="part${pt.dnp?" dnp":""}" data-part="${esc(pt.ref)}"><rect class="box" x="${N(x1-pad)}" y="${N(y1-pad)}" width="${N(w+2*pad)}" height="${N(h+2*pad)}" rx="${N(pad)}"/>`+
@@ -4696,11 +4859,11 @@ function buildFiltered(){
 function buildRenderList(){
   const el = $("blist"); if(!el) return;
   const rows = buildFiltered(); BUILD.visible = rows;
-  const both = model.parts.some(p=>p.side==="bottom" && !p.hardware) && model.parts.some(p=>p.side==="top" && !p.hardware);
+  const both = model.parts.some(p=>p.side==="bottom" && !p.hardware && !p.bomOnly) && model.parts.some(p=>p.side==="top" && !p.hardware && !p.bomOnly);
   el.innerHTML = rows.length ? rows.map(g=>`<div class="brow${g.key===BUILD.sel?" sel":""}${BUILD.placed[g.key]?" done":""}${g.dnp?" dnp":""}" data-key="${esc(g.key)}">`+
       `<input type="checkbox"${BUILD.placed[g.key]?" checked":""} title="Placed">`+
       `<div class="bmain"><div class="bval"><b>${g.value ? esc(g.value) : "(no value)"}</b><span class="bpkg">${esc(g.pkg)}</span><span class="bqty">×${g.qty}</span>`+
-      `${both?`<span class="btag">${g.side}</span>`:""}${g.tht?`<span class="btag">THT</span>`:""}${g.dnp?`<span class="btag warn">DNP · skip</span>`:""}${!g.value?`<span class="btag warn">no value</span>`:""}</div>`+
+      `${both?`<span class="btag">${g.side}</span>`:""}${g.tht?`<span class="btag">THT</span>`:""}${g.offBoard?`<span class="btag">not on the board</span>`:""}${g.dnp?`<span class="btag warn">DNP · skip</span>`:""}${!g.value?`<span class="btag warn">no value</span>`:""}</div>`+
       `<div class="brefs">${esc(g.refs.join(", "))}</div>${(g.mpn||g.desc||g.mfr)?`<div class="bmpn">${esc([g.mfr,g.mpn,g.desc].filter(Boolean).join(" · "))}</div>`:""}</div></div>`).join("")
     : `<div class="build-empty">${BUILD.groups.length ? "No parts match the search." : "No components on this board: only pads, test points, fiducials or mounting holes."}</div>`;
 }
@@ -4710,7 +4873,7 @@ function buildHighlight(){
   const refs = new Set();
   if(sel) sel.parts.forEach(p=>refs.add(p.ref));
   else if(BUILD.q.trim()) buildFiltered().forEach(g=>g.parts.forEach(p=>refs.add(p.ref)));      /* a search with no row picked lights every match */
-  svg.classList.toggle("sel", refs.size>0);
+  svg.classList.toggle("sel", [...refs].some(ref=>svg.querySelector(`.part[data-part="${CSS.escape(ref)}"]`)));   /* fade only when something lights up */
   svg.querySelectorAll(".part").forEach(g=>{ const ref = g.dataset.part; g.classList.toggle("hl", refs.has(ref)); g.classList.toggle("done", !!BUILD.placed[BUILD.refKey[ref]]); });
 }
 function buildProgress(){
@@ -4753,7 +4916,7 @@ function showBuild(){
   if(!model) return;
   if(BUILD.forBoard!==model.name){ buildLoad(); BUILD.forBoard = model.name; }
   BUILD.groups = buildGroups();
-  const hasBottom = model.parts.some(pt=>pt.side==="bottom" && !pt.hardware), hasTop = model.parts.some(pt=>pt.side==="top" && !pt.hardware);
+  const hasBottom = model.parts.some(pt=>pt.side==="bottom" && !pt.hardware && onDrawing(pt)), hasTop = model.parts.some(pt=>pt.side==="top" && !pt.hardware && onDrawing(pt));
   if(BUILD.side==="bottom" && !hasBottom) BUILD.side = "top";
   if(BUILD.side==="top" && !hasTop && hasBottom) BUILD.side = "bottom";
   const bd = buildBoardSvg(BUILD.side);
@@ -4827,6 +4990,7 @@ document.addEventListener("keydown", e=>{
 function showSheet(){
   document.body.classList.toggle("buildmode", cur.doc==="build");
   if(noteMode) setNoteMode(false);                                 /* an armed note mode never carries across documents */
+  closeCtxMenu();
   if(cur.doc==="build"){ showBuild(); return; }
   const list = docs[cur.doc]; if(!list||!list.length){ return; }
   closeNoteEditor();
@@ -4834,7 +4998,7 @@ function showSheet(){
   const keepPan = pan && pan.key===cur.doc+cur.idx;
   wrap.innerHTML = `<div class="credit">&copy; 2026 <a href="https://www.kdcircuits.com" target="_blank" rel="noopener">KD Circuits LLC</a> &middot; <a href="https://github.com/krdarrah/Fusion_Drawing_Generator" target="_blank" rel="noopener">source on GitHub</a> (MIT) &middot; suggestions? <a href="https://www.kdcircuits.com/#contact" target="_blank" rel="noopener">contact KD Circuits</a></div><div class="sheetbox" style="aspect-ratio:${sheet.w}/${sheet.h};width:100%;background:${TH.paper};">${sheet.svg}
       <div class="zoombar"><button data-zoom="in" title="Zoom in">+</button><button data-zoom="out" title="Zoom out">&minus;</button><button data-zoom="fit">fit</button></div>
-      <div class="tip">scroll to zoom &middot; drag to pan &middot; drag a designator, callout or note to move it &middot; double-click a designator to turn it, Alt+double-click to snap back &middot; double-click a note to edit it &middot; drag a note's ring to move its spot</div></div>`;
+      <div class="tip">scroll to zoom &middot; drag to pan &middot; drag a designator, callout or note to move it &middot; double-click a designator to turn it, Alt+double-click to snap back &middot; right-click to hide or to move a K / + / pin-1 mark &middot; drag a note's ring to move its spot</div></div>`;
   const svg = wrap.querySelector("svg");
   svg.removeAttribute("width"); svg.removeAttribute("height");
   if(!keepPan) pan = {key:cur.doc+cur.idx, x:0, y:0, w:sheet.w, h:sheet.h};
@@ -4850,6 +5014,7 @@ function showSheet(){
   let drag=null, ldrag=null;
   const toUnits = (dxPx, dyPx)=>{ const m = ctm(); return m ? [dxPx/m.a, dyPx/m.d] : [0,0]; };  /* screen px delta -> sheet mm */
   svg.addEventListener("pointerdown", e=>{
+    if(e.button!==0) return;                                          /* right-click opens the menu instead of dragging */
     const lab = e.target.closest && e.target.closest("[data-drag]");
     if(lab){ ldrag={el:lab, x:e.clientX, y:e.clientY, moved:false, id:e.pointerId}; e.preventDefault(); return; }
     drag={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y,id:e.pointerId,moved:false}; });
@@ -4893,6 +5058,22 @@ function showSheet(){
       cfg.overrides[dkey] = Object.assign({}, prev, {rot: cur===90 ? 0 : 90});
     } else delete cfg.overrides[dkey];
     save(); renderOverrideNote(); rebuild(); showSheet(); });
+  /* right-click: hide a part or callout, move / add / remove an orientation mark, edit or delete a note */
+  svg.addEventListener("contextmenu", e=>{
+    const mk = e.target.closest && e.target.closest("[data-mark]"), lab = e.target.closest && e.target.closest("[data-drag]");
+    if(!mk && !lab) return;
+    e.preventDefault();
+    if(lab && lab.dataset.note!=null){
+      const a = (cfg.annotations||[]).find(x=>String(x.id)===lab.dataset.note); if(!a) return;
+      openCtxMenu(e.clientX, e.clientY, "Note", [
+        {label:"Edit the note", run:()=>openNoteEditor(e.clientX, e.clientY, a.text, {onSave:v=>{ a.text = v; noteChanged(); }, onDelete:()=>{ cfg.annotations = cfg.annotations.filter(x=>x!==a); noteChanged(); }})},
+        {label:"Delete the note", run:()=>{ cfg.annotations = cfg.annotations.filter(x=>x!==a); noteChanged(); }}]);
+      return;
+    }
+    if(lab && /^(hole|mill)\|/.test(lab.dataset.drag)){ openCtxMenu(e.clientX, e.clientY, "Callout", calloutMenu(lab)); return; }
+    const ref = mk ? mk.dataset.mark : (lab && lab.dataset.ref);
+    if(ref) openCtxMenu(e.clientX, e.clientY, ref, partMenu(ref, lab && lab.dataset.ref===ref ? lab : null));
+  });
   /* note mode: click a spot on a view, type the note */
   svg.addEventListener("click", e=>{
     if(!noteMode) return;
@@ -4909,7 +5090,7 @@ function showSheet(){
     apply(); }));
   $("pg-label").textContent = `${cur.idx+1} / ${list.length}`;
   $("pg-prev").disabled = cur.idx===0; $("pg-next").disabled = cur.idx>=list.length-1;
-  renderNotesList();
+  renderNotesList(); renderHiddenList();
   $("sheetname").textContent = `${sheet.name} — ${cur.doc==="fab"?SHEETS[cfg.fabSize].label:SHEETS[cfg.asmSize].label} ${sheet.w} × ${sheet.h} mm`;
 }
 $("docseg").addEventListener("click", e=>{ const b=e.target.closest("button"); if(!b) return; cur.doc=b.dataset.doc; cur.idx=0;
@@ -4919,7 +5100,7 @@ $("pg-next").addEventListener("click", ()=>{ const list=docs[cur.doc]; if(list &
 
 /* ---------- stats & checks ---------- */
 function renderStats(){
-  const t=model.parts.filter(p=>p.side==="top" && !p.hardware).length, b=model.parts.filter(p=>p.side==="bottom" && !p.hardware).length;
+  const t=model.parts.filter(p=>p.side==="top" && !p.hardware && !p.bomOnly).length, b=model.parts.filter(p=>p.side==="bottom" && !p.hardware && !p.bomOnly).length;
   $("topstats").innerHTML =
     `<div class="stat"><b>${esc(model.name)}</b><span>board</span></div>`+
     `<div class="stat"><b>${fmtMM(model.w)} × ${fmtMM(model.h)}</b><span>mm</span></div>`+
@@ -4941,6 +5122,13 @@ function runChecks(){
   if(model.viaInPad && s.special.indexOf("Via in pad")<0 && s.special.indexOf("All vias filled with resin and capped")<0) w.push(`${model.viaInPad} via(s) sit inside SMD pads. Consider ticking "Via in pad" so PCBWay fills and caps them.`);
   if(model.milling.length) w.push(`Layer 46 (Milling) has ${model.milling.length} object(s); slots and cutouts are drawn dashed but not listed in the drill table.`);
   const dnp = model.parts.filter(p=>p.dnp).length; if(dnp) w.push(`${dnp} part(s) marked DNP are drawn grey and listed with quantity 0.`);
+  if(cfg.asm.pin1){
+    const byNote = {};
+    model.parts.filter(p=>!p.hardware && onDrawing(p) && !(cfg.marks||{})[p.ref]).forEach(p=>(p.marks||[]).forEach(m=>{ if(m.note) (byNote[m.note] = byNote[m.note]||[]).push(p.ref); }));
+    Object.keys(byNote).forEach(note=> w.push(`Verify the orientation mark on ${byNote[note].join(", ")}: ${note}. Right-click the mark on the assembly sheet to move it.`));
+  }
+  const offBoard = model.parts.filter(p=>p.bomOnly && !((cfg.hide||{}).show||{})[p.ref] && !((cfg.hide||{}).parts||{})[p.ref]).map(p=>p.ref);
+  if(offBoard.length) w.push(`${offBoard.join(", ")} ${offBoard.length>1?"have":"has"} no pads or footprint (cables, screws, labels), so ${offBoard.length>1?"they are":"it is"} left off the views and kept in the parts list.`);
   const box=$("warnblock"); box.hidden = !w.length;
   $("warns").innerHTML = w.map(t=>`<div class="help" style="padding:5px 7px;background:var(--flag-soft);border-radius:var(--r);color:var(--ink-2)">${esc(t)}</div>`).join("");
 }
@@ -4976,7 +5164,7 @@ function loadText(text, fileName){
       const d = window.DEMO_SETTINGS && window.DEMO_SETTINGS.cfg;
       if(d){ ["productTitle","partNumber","rev","docStatus"].forEach(k=>{ cfg.tb[k]=d.tb[k]; }); cfg.tb.boardName=""; cfg.tb.pcbPartNumber="";
         Object.assign(cfg.spec, d.spec); cfg.fabSize=d.fabSize; cfg.asmSize=d.asmSize; Object.assign(cfg.asm, d.asm);
-        cfg.overrides = {}; cfg.annotations = JSON.parse(JSON.stringify(d.annotations||[])); cfg.stack.custom=null; if(cfg.stack.source==="custom") cfg.stack.source="pcbway"; }
+        cfg.overrides = {}; cfg.hide = {parts:{}, callouts:{}, show:{}}; cfg.marks = {}; cfg.annotations = JSON.parse(JSON.stringify(d.annotations||[])); cfg.stack.custom=null; if(cfg.stack.source==="custom") cfg.stack.source="pcbway"; }
       vendorImg = null; syncForm(); autoSpecFromBoard();
       $("settingsnote").innerHTML = `Demo board loaded with example settings. Drop your own <b>.brd</b> on the left to replace it.`;
       renderOverrideNote();
@@ -4987,7 +5175,7 @@ function loadText(text, fileName){
     } else {
       cfg.stack.custom = null; if(cfg.stack.source==="custom") cfg.stack.source="pcbway"; $("s-stackSource").value=cfg.stack.source;
       ["productTitle","boardName","partNumber","pcbPartNumber","dwgFab","dwgAsm","techRef"].forEach(k=>{ cfg.tb[k]=""; });
-      cfg.tb.rev = "1.0"; vendorImg = null; cfg.overrides = {}; cfg.annotations = []; syncForm();
+      cfg.tb.rev = "1.0"; vendorImg = null; cfg.overrides = {}; cfg.hide = {parts:{}, callouts:{}, show:{}}; cfg.marks = {}; cfg.annotations = []; syncForm();
       autoSpecFromBoard();
     }
     importedPending = false;
@@ -5044,13 +5232,13 @@ $("btn-note2").addEventListener("click", ()=>{ if(model) setNoteMode(!noteMode);
 renderNotesList();
 function renderOverrideNote(){ const n = Object.keys(cfg.overrides||{}).length, a=(cfg.annotations||[]).length; const el=$("overridenote");
   if(el) el.textContent = (n ? `${n} label${n>1?"s":""} moved by hand. ` : "") + (a ? `${a} note${a>1?"s":""} added. ` : "") + (n||a ? "Saved with this board's settings; double-click a designator to turn it, Alt+double-click to snap it back. Notes are edited in the Drawing notes panel or by double-clicking them." : "Drag a designator or callout to place it yourself, double-click a designator to turn it; use + Add note to pin text to a spot.");
-  renderNotesList(); }
+  renderNotesList(); renderHiddenList(); }
 $("btn-resetOverrides").addEventListener("click", ()=>{ cfg.overrides = {}; save(); renderOverrideNote(); if(model){ rebuild(); showSheet(); } });
 $("btn-resetNotes").addEventListener("click", ()=>{ if(!(cfg.annotations||[]).length || confirm("Remove all notes added to this board's drawings?")){ cfg.annotations = []; save(); renderOverrideNote(); if(model){ rebuild(); showSheet(); } } });
 document.addEventListener("keydown", e=>{ if(e.key==="Escape" && noteMode) setNoteMode(false); });
 $("btn-fabNotesReset").addEventListener("click", ()=>{ cfg.fab.notes=""; $("f-notes").value=""; onChange("fab.notes"); });
 $("btn-asmNotesReset").addEventListener("click", ()=>{ cfg.asm.notes=DEFAULT_ASM_NOTES; $("a-notes").value=DEFAULT_ASM_NOTES; onChange("asm.notes"); });
-document.addEventListener("keydown", e=>{ if(e.target.matches("input,textarea,select")) return;
+document.addEventListener("keydown", e=>{ if((e.target.matches && e.target.matches("input,textarea,select"))) return;
   if(cur.doc==="build" || !docs[cur.doc]) return;
   if(e.key==="ArrowLeft") $("pg-prev").click(); if(e.key==="ArrowRight") $("pg-next").click(); });
 
